@@ -1,0 +1,46 @@
+# One-command self-host: `docker compose up`.
+# postgres (with pgvector) backs both the control plane (tenants, api keys,
+# jobs, webhook dedup) and, if VECTOR_STORE=pgvector, the Canon itself — one
+# connection string, one backup, for the whole system.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: lore
+      POSTGRES_PASSWORD: lore
+      POSTGRES_DB: lore
+    ports:
+      - "5432:5432"
+    volumes:
+      - lore_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lore"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://lore:lore@postgres:5432/lore
+      PORT: 8080
+    ports:
+      - "8000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://lore:lore@postgres:5432/lore
+    command: ["python", "-m", "app.jobs.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  lore_postgres_data:
