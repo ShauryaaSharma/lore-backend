@@ -36,6 +36,9 @@ app/
 Modular monolith on purpose — see the project's architecture notes for what's
 deliberately *not* here yet (no Kafka, no service mesh, no sharding): this is
 sized for the traffic Lore actually sees today, not for hypothetical scale.
+(`app/examples/kafka_ingestion/` is a self-contained demo of what a streaming
+ingestion path would look like *if* that changed — isolated from the real
+app, not wired in.)
 
 ## Local dev (no Docker)
 
