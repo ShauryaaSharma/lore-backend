@@ -1,0 +1,5 @@
+# Extra dependency for the Kafka ingestion demo only — intentionally not in
+# the top-level requirements.txt so installing/running the real app never
+# needs a Kafka client. kafka-python-ng is a maintained fork of the
+# (abandoned) kafka-python; pure Python, no librdkafka/C build step.
+kafka-python-ng>=2.2.3
