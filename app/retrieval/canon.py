@@ -6,7 +6,10 @@ layer, so this module keeps that shape rather than replacing it.
 Two modes, chosen automatically from config:
   MOCK  (no GROQ_API_KEY)  — token-overlap retrieval over the seed corpus.
   LIVE  (GROQ_API_KEY set) — real mem0 memory, real GitHub PR ingestion,
-                             LLM-composed cited answers.
+                             cross-encoder reranked, LLM-composed cited
+                             answers. See app/retrieval/rerank.py and
+                             app/eval/ for the reranker and its regression
+                             harness.
 """
 
 from __future__ import annotations
@@ -251,8 +254,13 @@ def answer_why(question: str, scope: str) -> dict:
                 "mode": "mock", "latency_s": latency}
 
     mem = get_memory()
-    results = mem.search(question, filters={"user_id": scope}, limit=6)
+    candidate_limit = settings.rerank_candidates if settings.rerank_enabled else settings.rerank_top_k
+    results = mem.search(question, filters={"user_id": scope}, limit=candidate_limit)
     hits = results.get("results", []) if isinstance(results, dict) else (results or [])
+
+    if settings.rerank_enabled and hits:
+        from app.retrieval.rerank import rerank
+        hits = rerank(question, hits, settings.rerank_top_k, lambda h: h.get("memory", ""))
 
     if not hits:
         return {"answer": _NO_MATCH, "sources": [], "mode": "live",

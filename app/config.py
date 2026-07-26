@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     embedder_model: str = "thenlper/gte-large"
     embedder_dims: int = 1024
 
+    # --- Reranking (local, free, no key) ---
+    # Dense search alone loses exact-term matches (a PR number, a ticket id)
+    # to paraphrases that "sound" closer. A cross-encoder rescoring the
+    # shortlist catches that. Same runtime (fastembed, ONNX, CPU) as the
+    # embedder, so this doesn't add a new dependency.
+    rerank_enabled: bool = True
+    rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    rerank_candidates: int = 20  # vector-search shortlist size, before rerank
+    rerank_top_k: int = 6        # how many survive rerank into the LLM prompt
+
     # --- Canon storage (vector memory) ---
     vector_store: Literal["qdrant", "pgvector"] = "qdrant"
     database_url: str = ""
