@@ -38,4 +38,7 @@ langfuse>=2.36.0
 # should stay lean; kept together here since this is a small project)
 pytest>=8.0
 pytest-mock>=3.14
-ruff>=0.6
+# Pinned, not floating. An unpinned linter means a new ruff release turns an
+# unrelated PR red — 0.16 widened the default rule set and did exactly that.
+# Bump this deliberately, in its own PR, with the fixes it asks for.
+ruff==0.15.12
