@@ -1,178 +1,224 @@
 # Architecture
 
-This is a **modular monolith** on purpose — no Kafka, no service mesh, no
-sharding, in the real ingestion path. It's sized for the traffic Lore
-actually sees today, not for hypothetical scale.
+Lore answers `/why` with cited, sourced answers about a team's own
+engineering decisions. The system is shaped by one constraint: **an
+uncited answer is worse than no answer.** Everything below follows from
+that.
+
+Implemented per [ADR-0001](docs/adr/0001-agentic-retrieval-with-langgraph.md).
+
+![v2 architecture](docs/lore-v2-architecture.png)
+
+## The four regions
+
+| Region | What it is | Where |
+|---|---|---|
+| **Harness** | A LangGraph `StateGraph`, one compiled graph per run | `app/agent/` |
+| **Loop** | The model with tools, capped at 4 hops | `app/agent/tools.py` |
+| **Memory** | Three tiers: procedural, semantic, episodic | `app/memory/` |
+| **LLM Ops** | Trace → observe → eval → gate | `app/obs/`, `app/eval/` |
 
 ## Module map
 
 ```
 app/
-  main.py       FastAPI app factory — lifespan runs migrations on boot, CORS,
-                 request-id/latency middleware, mounts health/v1/webhook routers
-  config.py     Pydantic-settings Settings — single source of truth for env vars;
-                 settings.mode = "live" iff GROQ_API_KEY is set
-  logging_setup.py  Structured JSON logging with request_id/tenant contextvars
-  metrics.py    In-process Prometheus-format counters/histograms, GET /metrics
+  main.py       FastAPI app factory — migrations on boot, CORS, request-id
+                 middleware, trace flush on shutdown
+  config.py     Pydantic-settings Settings — one source of truth, fails fast
+
+  agent/        The harness (v2)
+    graph.py      StateGraph: agent -> tools -> agent -> guardrail -> END
+    tools.py       search_canon, recent_decisions, fetch_pr_diff,
+                    search_commits, post_comment — built per request
+    guardrail.py    citation verification; rejects ungrounded answers
+    state.py         GraphState — ephemeral, reducer-annotated
+
+  memory/       The memory layer
+    procedural.py   prompts/*.md loader, mtime-cached
+    semantic.py      Qdrant or pgvector, called direct (no mem0)
+    episodic.py       Postgres — decision_events, why_queries
+    consolidate.py     summarizer agent: episodic -> semantic
+
+  obs/          LLM Ops
+    tracing.py      Langfuse behind a null object; never raises, never blocks
+
+  eval/         The gate
+    golden_set.py   hand-written Q&A cases tied to the seed corpus
+    harness.py       scores the active path; --compare runs both
+    judge.py          LLM-as-judge against prompts/judge.md (observe-only)
 
   api/          FastAPI routers only — no business logic
-    deps.py       API-key extraction, scope resolution, rate limiting
-    health.py     GET /health, GET /metrics
-    webhook.py    POST /webhook/github — signature verify + delivery dedup + dispatch
-    v1/           Versioned API, mounted under /v1 (see API reference in README)
-
-  auth/         API keys, scope resolution, rate limiting
-    keys.py        create/resolve/revoke keys, sha256-hashed at rest
-    scope.py        resolve_scope() — maps a request to a Canon scope
-    ratelimit.py     in-process per-key token-bucket limiter
-
+  auth/         API keys (hashed, DB-backed + env fallback), scope, rate limit
   ingestion/    GitHub App client, webhook handling, delivery dedup
-    github_client.py   JWT -> installation token -> REST, wrapped in retry + circuit breaker
-    webhook_handler.py  PR merged -> inscribe; PR opened -> comment; install -> enqueue backfill
-    dedup.py             delivery-id dedup backed by Postgres
+  retrieval/    canon.py (dispatch + writes), rerank.py, summarize.py
+  jobs/         Postgres queue (FOR UPDATE SKIP LOCKED) + worker
+  storage/      connection pool, migration runner, hand-written SQL
+  resilience/   retry with backoff+jitter, circuit breaker
+  examples/     self-contained demos, isolated from the real app
 
-  retrieval/    "The Canon" — mem0-backed decision memory
-    canon.py        core engine: mock (token-overlap) vs live (mem0 + Groq) modes
-    rerank.py         cross-encoder reranking of the vector-search shortlist
-    summarize.py       bot-noise stripping + PR "understanding" comment generation
-    seed_decisions.py   hard-coded seed corpus used by mock mode
-
-  eval/         Golden-set regression harness for /why answer quality
-    golden_set.py   hand-written Q&A cases tied to the seed corpus
-    harness.py        runs the golden set through answer_why(), scores hit rate
-
-  jobs/         Postgres-backed job queue + worker
-    queue.py       SELECT ... FOR UPDATE SKIP LOCKED claim/enqueue/progress/backoff
-    worker.py        poll-loop entrypoint: python -m app.jobs.worker
-    handlers.py        handle_backfill_installation — the one registered job type
-
-  storage/      Postgres connection pool, migration runner, queries
-    db.py           ConnectionPool (psycopg3) + run_migrations()
-    queries.py        hand-written SQL for tenants/api_keys/installations/idempotency
-
-  resilience/   Cross-cutting resilience primitives
-    retry.py         exponential backoff with full jitter
-    circuit_breaker.py  CLOSED -> OPEN -> HALF_OPEN state machine
-
-  examples/     Self-contained demos, isolated from the real app
-    kafka_ingestion/  Kafka/Redpanda streaming-ingestion demo — see below
+prompts/        Procedural memory — persona, citation policy, tool policy,
+                 judge rubric. Git-versioned, reviewed in PRs.
 ```
 
-## Data flow: GitHub webhook -> Canon
+## The loop
 
-1. GitHub sends a webhook -> `POST /webhook/github` (`app/api/webhook.py`).
-2. HMAC-SHA256 signature is verified (`verify_github_signature`; skipped only
-   when no secret is configured, for local `curl` testing).
-3. The delivery is deduped against a `webhook_deliveries` Postgres table
-   (`app/ingestion/dedup.py`) — GitHub retries on any non-2xx, so this stops
-   double-inscribing.
-4. **`pull_request` events**: opened/reopened -> post a best-effort
-   "understanding" comment via Groq; closed & merged ->
-   `canon.inscribe_pr(...)` writes the PR discussion into the Canon as a
-   decision.
-5. **`installation` / `installation_repositories` events**: not processed
-   inline. A `backfill_installation` job is enqueued instead, so the webhook
-   handler returns within GitHub's ~10s timeout; the worker picks it up
-   asynchronously and tracks progress per job row (avoids the classic bug of
-   a single in-process progress dict getting corrupted under concurrent
-   installs).
+```
+START → agent ─┬─(tool calls, hops left)→ tools → agent
+               └─(answer, or out of hops)→ guardrail → END
+```
 
-## Auth
+v1 was a fixed pipeline: embed, search, rerank, prompt, return. It could
+only ever answer from what had already been indexed — and when the Canon
+lacked a decision, it still produced a fluent, confident, wrong answer.
 
-- Migration `0001_control_plane.sql` creates `tenants`, `api_keys`,
-  `installations`, `repos`, `jobs`, `webhook_deliveries`, `idempotency_keys`.
-- API keys are sha256-hashed before storage/lookup — never stored or logged
-  raw. `create_key()` mints `lk_<token_urlsafe(32)>`, returned exactly once.
-- An env-var fallback, `LORE_API_KEYS=key:login,...`, supports zero-DB solo
-  self-hosting and is checked before the DB lookup.
-- `auth_enabled()` becomes true once *any* key exists (env or DB); every read
-  endpoint then requires a valid key and is scoped to that key's tenant only.
-  With auth off, scope falls back to `LORE_DEFAULT_ACCOUNT` (single-tenant
-  mode).
-- Admin operations (`POST` / `DELETE /v1/keys`) are gated by a separate
-  `X-Admin-Secret` header (`LORE_ADMIN_SECRET`) — the actual trust boundary
-  for minting new tenant credentials, since there's no end-user login yet.
-- Rate limiting is an in-process per-key token bucket
-  (`RATE_LIMIT_REQUESTS_PER_MINUTE`) — fine for a single backend instance;
-  Redis is the noted upgrade path once horizontally scaled.
+The loop fixes the structural half. The model gets tools and decides whether
+it has enough to answer or needs to go fetch:
+
+| Tool | When the model should reach for it |
+|---|---|
+| `search_canon` | Always first — recorded decisions, by meaning |
+| `recent_decisions` | "Lately", "last month" — similarity can't order by time |
+| `fetch_pr_diff` | The question names a PR the Canon has no decision for |
+| `search_commits` | A reason recorded as a `Why:` trailer, never in a PR |
+| `post_comment` | Only when explicitly asked; the one outward side effect |
+
+Two properties are enforced in code rather than asked for in the prompt:
+
+- **Scope is bound, not passed.** Tools close over the scope resolved from
+  the caller's API key, so the model has no way to name a tenant. Tools are
+  built per request for this reason (`app/agent/tools.py`).
+- **The hop cap terminates the loop.** At `AGENT_MAX_HOPS` the router sends
+  the run to the guardrail regardless of what the model wants. A runaway
+  loop fails loud instead of burning the Groq quota.
+
+## The guardrail
+
+Where an answer becomes shippable, or doesn't. It checks the answer against
+what retrieval *actually returned* — not against what the answer claims.
+
+| Verdict | Meaning |
+|---|---|
+| `ok` | Every citation maps to a retrieved decision |
+| `abstain` | Says the Canon has no record — correct behaviour, not a failure |
+| `violation` | Cites something never retrieved, or states specifics with no citation |
+
+A violation never reaches the user. It's replaced with an honest message
+naming the closest records found.
+
+It's deliberately string matching, not an LLM check: a guardrail that can
+hallucinate is not a guardrail. Both paths run it — an uncited answer isn't
+more shippable because the v1 pipeline produced it.
+
+## The memory layer
+
+One undifferentiated vector store conflated three things that want different
+storage and answer different questions.
+
+**Procedural** — *how to behave.* `prompts/*.md`, git-versioned. A prompt in
+a database is a config change nobody can review; as a file, changing the
+persona or the citation rules is a diff in a PR. Cached by mtime, so edits
+land without a restart in development.
+
+**Semantic** — *durable facts.* Qdrant (or pgvector), searched by meaning,
+called directly. mem0 used to wrap this; it came out because the agent needs
+the raw score, the stable decision id and untouched metadata — the reranker,
+the guardrail and provenance each need one of those — and because
+consolidation is now an explicit job rather than a framework's side effect.
+
+**Episodic** — *dated events.* Postgres (`decision_events`, `why_queries`).
+"What did we decide last month" is `order by occurred_at desc`, not
+nearest-neighbour; running it through embeddings returns decisions that
+*sound* recent, which is subtly wrong rather than merely slow. The
+control-plane database was already holding most of this — this gives it a
+retrieval path instead of leaving it write-only.
+
+### Write-through, then compact
+
+Ingestion writes to episodic *and* semantic memory at once, so a PR merged
+sixty seconds ago is answerable now. The summarizer agent
+(`SUMMARIZER_MODEL`, Llama 3.1 8B) later distils the raw text and marks the
+event consolidated — same `source`, so the distilled version overwrites the
+raw one instead of competing with it in search.
+
+Compaction runs on the worker: the sweep looks for tenants with
+`CONSOLIDATE_AFTER_N_EVENTS` pending and queues a job each. A failed
+summary leaves its event pending, so nothing is silently dropped.
+
+## LLM Ops
+
+**Trace** — one Langfuse trace per graph run: every tool call, every hop, the
+guardrail verdict, the prompt fingerprint. `trace_id` is stored on the
+`why_queries` row, so a bad answer in the database opens as a trace in the
+UI.
+
+Two rules hold throughout `app/obs/`: tracing never raises into the caller,
+and never blocks the answer (spans flush at shutdown). Unconfigured, the
+whole layer is a null object.
+
+**Eval** — the golden set, plus an LLM-as-judge pass scoring *grounded*,
+*answers_question*, and *explains_why* against `prompts/judge.md`.
+
+**Gate** — `hit_rate` and `citation_accuracy` against configured floors.
+The judge is **observe-only** (`JUDGE_ENABLED=false`): a judge that hasn't
+been checked against human reading is a metric, not a policy, and gating on
+it early means optimising for a model's taste.
+
+```bash
+python -m app.eval.harness --compare
+```
+
+Scores the v1 pipeline and the v2 agent back to back on the same store —
+which is the point of keeping the fallback: the loop has to out-perform
+something. Note the agent path is non-deterministic; one run is a sample,
+not a measurement.
 
 ## Job queue
 
-Postgres-backed, no external broker — deliberately not Celery/RQ/Temporal.
-`SELECT ... FOR UPDATE SKIP LOCKED` atomically claims a `queued` job whose
-`run_after <= now()` (the same pattern as Oban/GoodJob/River). Job state
-(`status`, `attempts`, `progress` jsonb, `error`) lives in the `jobs` table,
-so it survives process restarts. Failures requeue with exponential backoff
-(`2^attempts` seconds) up to `JOB_MAX_ATTEMPTS`, then fail permanently. The
-worker (`app/jobs/worker.py`) is a plain poll loop on
-`JOB_POLL_INTERVAL_SECONDS`.
+Postgres-backed, no broker — `SELECT ... FOR UPDATE SKIP LOCKED` to claim a
+due job (the Oban/GoodJob/River pattern). Job state lives in the `jobs`
+table, so it survives restarts; failures requeue with exponential backoff up
+to `JOB_MAX_ATTEMPTS`. Two job types: `backfill_installation` and
+`consolidate_memory`.
+
+## Ingestion
+
+1. GitHub webhook → `POST /webhook/github`.
+2. HMAC-SHA256 signature verified.
+3. Delivery deduped against `webhook_deliveries` — GitHub retries on any
+   non-2xx, so this stops double-inscribing.
+4. **PR merged** → `canon.inscribe_pr` writes to episodic + semantic memory.
+   **PR opened** → best-effort "understanding" comment.
+5. **Installation events** → enqueue a backfill job so the webhook returns
+   inside GitHub's ~10s timeout; the worker tracks progress per job row.
 
 ## Resilience
 
-- **Retry** (`app/resilience/retry.py`): exponential backoff with full jitter
-  (`sleep = random(0, base * 2**attempt)`, capped at `max_delay`), decorator-
-  based, retries on exception type or a custom response predicate (e.g. HTTP
-  429/5xx). Wraps every GitHub REST call.
-- **Circuit breaker** (`app/resilience/circuit_breaker.py`): CLOSED -> OPEN ->
-  HALF_OPEN. Trips after `failure_threshold` consecutive failures, fails fast
-  for `cooldown_seconds`, then allows one probe call. One instance per
-  downstream dependency — GitHub and Groq each get their own.
-- **Idempotency**: `POST /v1/inscribe` honors an `Idempotency-Key` header
-  (backed by the `idempotency_keys` table), so a retried CLI call after a
-  network blip doesn't double-write a commit.
+- **Retry** — exponential backoff with full jitter, wrapping every GitHub
+  REST call.
+- **Circuit breaker** — CLOSED → OPEN → HALF_OPEN, one instance per
+  downstream dependency (GitHub and Groq each get their own).
+- **Idempotency** — `POST /v1/inscribe` honours `Idempotency-Key`, so a
+  retried CLI call after a network blip doesn't double-write.
+- **Degradation** — a vector-store outage returns "no record" rather than a
+  500; a failing tool is reported to the model as text so it can try another
+  angle.
 
-## Retrieval: reranking + eval
+## Migrations
 
-`/why` doesn't just take mem0's top vector-search hits as-is. Dense embedding
-similarity is semantically strong but lexically blind — it loses exact-term
-matches (a PR number, a ticket ID) to paraphrases that just "sound" closer.
-So `answer_why()` widens the shortlist to `RERANK_CANDIDATES` (20) and
-rescores it with a fastembed cross-encoder (jointly scores `(query,
-candidate)` pairs — too slow to run over the whole Canon, cheap enough over a
-shortlist) before keeping the best `RERANK_TOP_K` (6) for the LLM prompt.
-Toggle it off with `RERANK_ENABLED=false` to compare directly. Uses the same
-ONNX/CPU runtime already pulled in for embeddings, so it adds no new
-dependency.
+Plain numbered `.sql` files in `migrations/`, applied in order and tracked in
+`schema_migrations`. No ORM. `run_migrations()` is safe on every boot and is
+called by both the API and the worker.
 
-`app/eval/` is a small regression harness: a golden question set (6 hand-
-written cases, each tied to a seed-corpus decision with an expected citation
-and expected keywords) run through `answer_why()`, scored for
-`citation_hit` and `keyword_hit`. It's deterministic in MOCK mode (no API
-keys needed), so `tests/test_eval_harness.py` gates CI on a hit-rate floor
-(>=0.9). This is a regression gate against retrieval/reranking breakage, not
-an exhaustive quality benchmark. Run it manually against the real path with:
+- `0001_control_plane.sql` — tenants, api_keys, installations, repos, jobs,
+  webhook_deliveries, idempotency_keys
+- `0002_memory_layer.sql` — decision_events, why_queries
 
-```bash
-python -m app.eval.harness   # after POST /v1/ingest/seed in LIVE mode
-```
+The pgvector table is created lazily at first use rather than in a migration,
+so a plain Postgres without the extension can still run the control plane.
 
-## Kafka ingestion demo (not wired in)
+## What's deliberately not here
 
-`app/examples/kafka_ingestion/` is a self-contained demo of what a streaming
-ingestion path would look like *if* Lore ever outgrew the Postgres-polled
-queue (e.g. CI events, bulk multi-tenant backfills) — it is **not** part of
-the real ingestion path, which remains GitHub webhook -> Postgres job queue.
-
-- `producer.py` publishes a `pr_merged` event (same shape the real webhook
-  handler receives) to a Kafka topic.
-- `consumer.py`'s `handle_event()` logs the event by default; with `--live`,
-  it calls `canon.inscribe_pr(...)` — the *same* function the real webhook
-  path calls, showing both ingestion paths converge on the same write.
-- Its own `KafkaSettings` and `requirements.txt` are kept separate from
-  `app.config.Settings` and the main `requirements.txt`, so running the demo
-  never changes real app boot behavior and the module can be deleted without
-  touching production code.
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.kafka.yml up -d redpanda
-python -m app.examples.kafka_ingestion.consumer
-python -m app.examples.kafka_ingestion.producer --sample
-```
-
-## Database migrations
-
-No ORM or migration framework — plain numbered `.sql` files in `migrations/`,
-applied in order and tracked in a `schema_migrations` table. `run_migrations()`
-(`app/storage/db.py`) globs `migrations/*.sql`, applies any not yet recorded,
-and commits after each — it's safe to call on every boot, and it is: both
-the API (on startup, via lifespan) and the worker call it automatically.
+A modular monolith on purpose — no Kafka, no service mesh, no sharding in the
+real ingestion path. `app/examples/kafka_ingestion/` is a self-contained demo
+of what a streaming path *would* look like, isolated so it can be deleted
+without touching production code.

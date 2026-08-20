@@ -4,13 +4,19 @@ The FastAPI service behind [Lore](https://github.com/lorehasit) — an engineeri
 team's decision memory. Captures the *why* behind merged pull requests (via a
 GitHub App) and answers `/why` questions with cited, sourced answers.
 
+A LangGraph agent that can go fetch what it doesn't have, over three memory
+tiers, behind a guardrail that won't ship an uncited answer. Runs entirely on
+free and self-hosted services.
+
 Companion repos: [`lore-cli`](https://github.com/lorehasit/lore-cli) (the
 `npx lore` git-hook CLI that captures commit `Why:` trailers) and
 [`lore-vscode-extension`](https://github.com/lorehasit/lore-vscode-extension).
 
-For a detailed look at the module map, data flow, auth, job queue,
-resilience patterns, and retrieval/reranking design, see
-[ARCHITECTURE.md](ARCHITECTURE.md).
+For the design and the reasoning behind it, see
+[ARCHITECTURE.md](ARCHITECTURE.md) and
+[ADR-0001](docs/adr/0001-agentic-retrieval-with-langgraph.md).
+
+![v2 architecture](docs/lore-v2-architecture.png)
 
 ## Quickstart (self-host)
 
@@ -20,85 +26,119 @@ docker compose up
 curl localhost:8000/health
 ```
 
-That's Postgres + the API + the background worker, all in one command.
+Postgres, Qdrant, the API and the worker, in one command.
 
-- **MOCK mode** (no `GROQ_API_KEY`): `/why` answers come from token-overlap
-  search over a hard-coded seed corpus. Good for demos and CI — deterministic,
-  zero external calls.
-- **LIVE mode**: add `GROQ_API_KEY` to `.env` and restart for real retrieval
-  (mem0 + embeddings + reranking) and real GitHub ingestion.
+- **MOCK mode** (no `GROQ_API_KEY`): answers come from token-overlap search
+  over a curated seed corpus. Deterministic, no external calls — good for
+  demos and CI.
+- **LIVE mode**: add `GROQ_API_KEY` and restart for the agent loop, real
+  retrieval, and real GitHub ingestion.
 
-`DATABASE_URL` (Postgres) is required in both modes — the control plane
-(auth, jobs, webhook dedup) always lives there.
+`DATABASE_URL` is required in both modes — the control plane and episodic
+memory live in Postgres regardless.
 
 ## Tech stack
 
-| Concern | Choice | Notes |
+| Layer | Choice | Cost |
 |---|---|---|
-| Web framework | FastAPI + Uvicorn (ASGI) | `app/main.py` |
-| Config | `pydantic-settings` | single `Settings` object, fail-fast validation |
-| Database | PostgreSQL (`pgvector/pgvector:pg16` image) | control plane always; optional vector store too |
-| DB driver | `psycopg` v3 + `psycopg-pool` | no ORM — hand-written SQL |
-| Job queue | Postgres (`FOR UPDATE SKIP LOCKED`) | no Celery/RQ/Redis — see [ARCHITECTURE.md](ARCHITECTURE.md#job-queue) |
-| Auth | DB-backed API keys (sha256-hashed) + env fallback | see [ARCHITECTURE.md](ARCHITECTURE.md#auth) |
-| GitHub integration | GitHub App, `PyJWT[crypto]` (RS256) | JWT → installation token → REST |
-| LLM | Groq (`groq` SDK), default `llama-3.3-70b-versatile` | only in LIVE mode |
-| Memory / RAG | `mem0ai` | wraps LLM + embedder + vector store |
-| Embeddings | `fastembed` (ONNX, CPU), default `thenlper/gte-large` | no GPU required |
-| Reranking | `fastembed` cross-encoder, default `Xenova/ms-marco-MiniLM-L-6-v2` | see [ARCHITECTURE.md](ARCHITECTURE.md#retrieval-reranking--eval) |
-| Vector store | `qdrant` (local file, default) or `pgvector` (same Postgres) | `VECTOR_STORE` env |
-| Resilience | Custom retry-with-jitter + circuit breaker | `app/resilience/` |
-| Observability | Structured JSON logs, in-process Prometheus-format metrics | `GET /metrics` |
-| Testing | `pytest`, `ruff` | needs a live Postgres |
-| Packaging | Single `python:3.12-slim` Docker image | same image for API and worker |
+| Web framework | FastAPI + Uvicorn | — |
+| Orchestration | **LangGraph** `StateGraph` | OSS, MIT |
+| Agent LLM | Groq — Llama 3.3 70B | free tier |
+| Summarizer LLM | Groq — Llama 3.1 8B | free tier |
+| Embeddings + reranking | fastembed (ONNX, CPU) | $0, no API |
+| Semantic memory | Qdrant (or pgvector) | free / self-host |
+| Episodic memory + control plane | PostgreSQL | self-hosted |
+| Job queue | Postgres `FOR UPDATE SKIP LOCKED` | no broker |
+| Tracing + eval | Langfuse | OSS, self-host |
+| Auth | DB-backed API keys, sha256-hashed | — |
+| Testing | pytest, ruff | — |
 
-## API reference
+No new cloud bill. Nothing here requires an account anywhere.
 
-Versioned routes are mounted under `/v1`; system routes are not versioned.
+## How an answer gets made
+
+```
+question → agent ─┬─(needs more)→ tools → agent
+                  └─(has enough)→ guardrail → answer + citations
+```
+
+The model decides whether the Canon covered the question or whether it needs
+to go read the PR itself. Capped at 4 hops. Before anything reaches the user,
+the guardrail checks every citation against what retrieval actually returned —
+an answer citing a PR that was never retrieved does not ship.
+
+Memory is three tiers, because they answer different questions:
+**procedural** (how to behave — `prompts/*.md`, git-versioned),
+**semantic** (durable distilled decisions — vector search), and
+**episodic** (dated events and past answers — SQL, ordered by time).
+
+Details in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## API
 
 | Method & path | Purpose |
 |---|---|
-| `GET /health` | Mode (mock/live), auth status, GitHub App status |
-| `GET /metrics` | Prometheus-format counters/histograms |
-| `POST /webhook/github` | GitHub App webhook receiver |
-| `POST /v1/why` | Core Q&A — `answer_why(question, scope)` |
+| `POST /v1/why` | Core Q&A — returns `answer`, `sources`, `path`, `hops`, `guardrail`, `trace_id` |
+| `GET /v1/why/history` | Recently answered questions for this Canon |
 | `GET /v1/canon`, `GET /v1/memories` | Cursor-paginated dump of the Canon |
-| `POST /v1/lore` | Free-text search over the Canon (no narrative answer) |
-| `POST /v1/ingest/seed` | Load the seed corpus into mem0 (LIVE mode) |
-| `POST /v1/inscribe` | CLI "Scribe" writes a commit's `Why:` (idempotent) |
-| `GET /v1/backfill/status` | Query installation backfill job status |
-| `POST /v1/backfill/run` | Manually trigger an installation backfill |
-| `POST /v1/keys` | Issue an API key (admin-secret-gated) |
-| `DELETE /v1/keys/{id}` | Revoke an API key (admin-secret-gated) |
+| `POST /v1/lore` | Free-text search, no composed answer |
+| `POST /v1/ingest/seed` | Load the seed corpus (LIVE mode) |
+| `POST /v1/inscribe` | CLI writes a commit's `Why:` (idempotent) |
+| `GET /v1/backfill/status`, `POST /v1/backfill/run` | Installation backfill |
+| `POST /v1/keys`, `DELETE /v1/keys/{id}` | API keys (admin-secret-gated) |
+| `GET /health` | Mode, active path, loaded prompts, tracing status |
+| `GET /metrics` | Prometheus-format counters |
+| `POST /webhook/github` | GitHub App webhook receiver |
+
+## Eval
+
+```bash
+python -m app.eval.harness              # score the active path
+python -m app.eval.harness --compare    # v1 pipeline vs v2 agent, same store
+python -m app.eval.harness --judge      # add LLM-as-judge (LIVE only)
+```
+
+A golden question set scored for citation accuracy and relevance.
+Deterministic in MOCK mode, so `tests/test_eval_harness.py` gates CI on a
+hit-rate floor. The LLM judge is observe-only until its scores have been
+checked against human reading.
+
+The `--compare` mode is why the v1 pipeline is still in the tree: the loop
+has to out-perform something. Note that the agent path is non-deterministic —
+one run is a sample, not a measurement.
+
+## Tracing (optional)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.langfuse.yml up
+```
+
+Open http://localhost:3000, create a project, put its keys in `.env` as
+`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`, restart the backend. Until
+then every trace call is a no-op — nothing in the request path depends on
+Langfuse being reachable.
 
 ## Configuration
 
-All variables live in `.env.example` (safe defaults, no real secrets — the
-file works as-is in MOCK mode).
+Everything lives in `.env.example` with safe defaults. The knobs worth
+knowing:
 
-| Category | Variables |
-|---|---|
-| Control plane (always required) | `DATABASE_URL` |
-| LLM (Groq) | `GROQ_API_KEY`, `GROQ_MODEL` |
-| Embeddings (local, fastembed) | `EMBEDDER_MODEL`, `EMBEDDER_DIMS` |
-| Reranking (local, fastembed) | `RERANK_ENABLED`, `RERANK_MODEL`, `RERANK_CANDIDATES`, `RERANK_TOP_K` |
-| Canon vector storage | `VECTOR_STORE` (`qdrant` or `pgvector`) |
-| GitHub personal-token ingestion | `GITHUB_TOKEN` |
-| GitHub App webhook | `GITHUB_WEBHOOK_SECRET` |
-| GitHub App identity | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_PRIVATE_KEY_PATH`, `BACKFILL_DAYS` |
-| Retrieval scope (single-tenant) | `LORE_DEFAULT_ACCOUNT` |
-| Multi-tenant auth env fallback | `LORE_API_KEYS` (comma-separated `key:login` pairs) |
-| Admin | `LORE_ADMIN_SECRET` |
-| Jobs/worker | `JOB_POLL_INTERVAL_SECONDS`, `JOB_MAX_ATTEMPTS` |
-| Rate limiting | `RATE_LIMIT_REQUESTS_PER_MINUTE` |
-| Observability | `LOG_LEVEL`, `LOG_JSON` |
+| Variable | Default | What it does |
+|---|---|---|
+| `AGENT_LOOP_ENABLED` | `true` | `false` falls back to the v1 pipeline |
+| `AGENT_MAX_HOPS` | `4` | Tool-call budget per question |
+| `RERANK_ENABLED` | `true` | Cross-encoder rescoring of the shortlist |
+| `VECTOR_STORE` | `qdrant` | Or `pgvector` to reuse the same Postgres |
+| `CONSOLIDATE_AFTER_N_EVENTS` | `25` | When the summarizer distils a tenant's backlog |
+| `JUDGE_ENABLED` | `false` | LLM-as-judge in the eval report |
+| `EVAL_HIT_RATE_FLOOR` | `0.9` | What CI actually enforces |
 
 ## Local dev (no Docker)
 
 ```bash
 python -m venv .venv && . .venv/Scripts/activate  # or source .venv/bin/activate
 pip install -r requirements.txt
-# Needs a reachable Postgres — either `docker compose up postgres` or your own.
+# Needs a reachable Postgres — `docker compose up postgres` or your own.
 uvicorn app.main:app --reload --port 8000
 # in another terminal:
 python -m app.jobs.worker
@@ -111,17 +151,16 @@ pytest
 ruff check .
 ```
 
-Tests need a live, reachable Postgres (`DATABASE_URL`) — they run real
-migrations and truncate control-plane tables between tests rather than
-mocking the database. Notable suites: `test_jobs_queue.py` (claim semantics,
-backoff, independent per-installation progress), `test_auth.py`,
-`test_idempotency.py`, `test_webhook_dedup.py`, `test_resilience.py`
-(retry/circuit-breaker), `test_rerank.py` and `test_eval_harness.py`
-(retrieval quality, CI regression gate), `test_kafka_ingestion_demo.py`
-(fully mocked, no real broker).
+Tests need a live Postgres (`DATABASE_URL`) — they run real migrations and
+truncate between cases rather than mocking the database. The agent, judge and
+summarizer are driven by scripted fakes, so the suite makes no network calls
+and needs no API keys.
+
+`tests/test_kafka_ingestion_demo.py` needs the demo's own optional
+dependency (`app/examples/kafka_ingestion/requirements.txt`).
 
 ## Deploying the GitHub App
 
-See the webhook payload shapes handled in `app/ingestion/webhook_handler.py`.
 Point the App's webhook URL at `<your-host>/webhook/github` and set
-`GITHUB_WEBHOOK_SECRET` / `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`.
+`GITHUB_WEBHOOK_SECRET` / `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`. The
+payload shapes handled are in `app/ingestion/webhook_handler.py`.

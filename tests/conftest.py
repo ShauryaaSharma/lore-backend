@@ -25,7 +25,8 @@ def _clean_control_plane():
     with get_conn() as conn:
         conn.execute(
             "truncate table jobs, webhook_deliveries, idempotency_keys, "
-            "api_keys, installations, repos, tenants restart identity cascade"
+            "api_keys, installations, repos, tenants, "
+            "decision_events, why_queries restart identity cascade"
         )
         conn.commit()
 

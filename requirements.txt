@@ -5,18 +5,34 @@ pydantic-settings>=2.2
 python-dotenv>=1.0
 requests>=2.31
 
-# Control plane storage (tenants, api keys, jobs, webhook dedup, idempotency)
+# Control plane + episodic memory (tenants, api keys, jobs, webhook dedup,
+# idempotency, decision events, past /why queries)
 psycopg[binary]>=3.1
 psycopg-pool>=3.2
 
 # GitHub App auth — sign the app JWT (RS256) to mint installation tokens.
 PyJWT[crypto]>=2.8
 
-# Live mode — real memory (only exercised once GROQ_API_KEY is set).
-# Safe to install now; the backend runs in mock mode without any keys.
-mem0ai>=0.1.0
+# --- The agent harness (v2, see docs/adr/0001-*.md) ---
+# LangGraph runs the tool-calling loop as an explicit state machine: the hop
+# cap, checkpointing and per-node tracing are first-class instead of
+# hand-rolled around a while loop.
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-groq>=0.2.0
+
+# Semantic memory. Called directly rather than through mem0: consolidation is
+# the summarizer agent's job now, and the tools need raw scored hits with
+# decision ids so the reranker and the citation guardrail can do theirs.
+qdrant-client>=1.9.0
+
+# LLM + local embeddings/reranking (ONNX, CPU, no key, no rate limit).
 groq>=0.3.0
 fastembed>=0.2.0
+
+# Tracing + eval. Self-hosted; the SDK no-ops when unconfigured, so mock mode
+# and CI need no Langfuse instance at all.
+langfuse>=2.36.0
 
 # Test / lint (dev only — split into requirements-dev.txt if the image
 # should stay lean; kept together here since this is a small project)

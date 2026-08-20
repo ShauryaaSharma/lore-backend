@@ -24,6 +24,10 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://lore:lore@localhost:5432/lore
+      # Embedded Qdrant — the agent, judge and summarizer are all driven by
+      # scripted fakes in the suite, so no vector server and no API keys are
+      # needed. Absence of GROQ_API_KEY also keeps the eval harness in the
+      # deterministic MOCK path, which is what makes it a usable gate.
       VECTOR_STORE: qdrant
       LORE_ADMIN_SECRET: ci-admin-secret
 
@@ -33,6 +37,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -42,3 +47,9 @@ jobs:
 
       - name: Test
         run: pytest -v
+
+      # The gate from ADR-0001. Runs the golden set through the active path
+      # and fails the build below the configured floors — a retrieval or
+      # reranking regression should not merge quietly.
+      - name: Eval gate
+        run: python -m app.eval.harness

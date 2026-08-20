@@ -1,7 +1,12 @@
 # One-command self-host: `docker compose up`.
-# postgres (with pgvector) backs both the control plane (tenants, api keys,
-# jobs, webhook dedup) and, if VECTOR_STORE=pgvector, the Canon itself — one
-# connection string, one backup, for the whole system.
+#
+# postgres backs the control plane (tenants, api keys, jobs, webhook dedup)
+# and episodic memory (dated decision events, past /why queries). Qdrant backs
+# semantic memory. Both run here; nothing needs an account anywhere.
+#
+# Tracing is opt-in and separate:
+#   docker compose -f docker-compose.yml -f docker-compose.langfuse.yml up
+# so the default `up` stays a three-service stack.
 
 services:
   postgres:
@@ -20,27 +25,47 @@ services:
       timeout: 5s
       retries: 10
 
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    ports:
+      - "6333:6333"
+    volumes:
+      - lore_qdrant_data:/qdrant/storage
+    healthcheck:
+      # No curl/wget in the image — use the shell's own TCP redirection.
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   backend:
     build: .
     env_file: .env
     environment:
       DATABASE_URL: postgresql://lore:lore@postgres:5432/lore
+      QDRANT_URL: http://qdrant:6333
       PORT: 8080
     ports:
       - "8000:8080"
     depends_on:
       postgres:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
   worker:
     build: .
     env_file: .env
     environment:
       DATABASE_URL: postgresql://lore:lore@postgres:5432/lore
+      QDRANT_URL: http://qdrant:6333
     command: ["python", "-m", "app.jobs.worker"]
     depends_on:
       postgres:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
 volumes:
   lore_postgres_data:
+  lore_qdrant_data:
