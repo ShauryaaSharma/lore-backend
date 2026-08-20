@@ -23,12 +23,30 @@ def run_forever() -> None:
     configure_logging()
     run_migrations()
     logger.info("worker started, polling every %.1fs", settings.job_poll_interval_seconds)
+    next_sweep = 0.0
     while True:
+        # Memory consolidation has no external trigger — nothing arrives to
+        # say "this tenant has accumulated enough raw events". The worker
+        # sweeps for it on an interval rather than the deployment growing a
+        # cron sidecar for one periodic task.
+        if time.monotonic() >= next_sweep:
+            _sweep_consolidations()
+            next_sweep = time.monotonic() + settings.consolidate_sweep_seconds
+
         job = queue.claim_next(tuple(HANDLERS.keys()))
         if job is None:
             time.sleep(settings.job_poll_interval_seconds)
             continue
         _run_job(job)
+
+
+def _sweep_consolidations() -> None:
+    from app.jobs.handlers import enqueue_due_consolidations
+
+    try:
+        enqueue_due_consolidations()
+    except Exception:  # a failed sweep must not stop the worker draining jobs
+        logger.exception("consolidation sweep failed")
 
 
 def _run_job(job: dict) -> None:

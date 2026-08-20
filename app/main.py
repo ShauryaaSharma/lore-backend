@@ -26,6 +26,7 @@ from app.api.v1.router import router as v1_router
 from app.api.webhook import router as webhook_router
 from app.logging_setup import configure_logging, new_request_id, request_id_var
 from app.metrics import incr, observe
+from app.obs import tracing
 from app.storage.db import run_migrations
 
 configure_logging()
@@ -38,6 +39,9 @@ async def lifespan(app: FastAPI):
     if applied:
         logger.info("applied migrations: %s", applied)
     yield
+    # Traces are buffered and flushed here rather than per request — a /why
+    # should never wait on the observability backend.
+    tracing.flush()
 
 
 app = FastAPI(title="Lore", version="1.0.0", lifespan=lifespan)
