@@ -103,6 +103,21 @@ def upsert_installation(tenant_id: str, github_installation_id: int,
         return str(row[0])
 
 
+def get_installation_id_for_account(account_login: str) -> Optional[int]:
+    """The GitHub installation backing an account, so the agent's tools can
+    mint a token for it. Returns None when the App isn't installed — the
+    tools then say so rather than failing the whole run."""
+    if not account_login:
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "select github_installation_id from installations "
+            "where lower(account_login) = lower(%s) order by id desc limit 1",
+            (account_login,),
+        ).fetchone()
+    return int(row[0]) if row else None
+
+
 def get_or_create_tenant_for_account(account_login: str) -> str:
     """One tenant per GitHub account for now — a tenant maps 1:1 to the
     account that installed the App. Kept separate from `installations` so a

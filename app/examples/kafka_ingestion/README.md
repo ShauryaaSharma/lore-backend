@@ -2,11 +2,11 @@
 
 This module is **not wired into the real ingestion path**. Lore's actual
 ingestion is the GitHub webhook (`app/ingestion/webhook_handler.py`) feeding
-a Postgres job queue (`app/jobs/queue.py`) — see the top-level README:
+a Postgres job queue (`app/jobs/queue.py`) — see
+[ARCHITECTURE.md](../../../ARCHITECTURE.md):
 
-> Modular monolith on purpose — no Kafka, no service mesh, no sharding: this
-> is sized for the traffic Lore actually sees today, not for hypothetical
-> scale.
+> A modular monolith on purpose — no Kafka, no service mesh, no sharding in
+> the real ingestion path.
 
 That's still true. This module exists to show what a streaming ingestion
 path *would* look like if a future integration needed one — e.g. a
@@ -23,7 +23,8 @@ it can be deleted without touching the production system.
   default it only logs what it received; pass `--live` to actually call
   `app.retrieval.canon.inscribe_pr(...)`, the same function the webhook
   path calls, so you can see the two ingestion paths converge on the same
-  write.
+  write — which now means the same write-through into episodic *and*
+  semantic memory.
 - `settings.py` — its own tiny `KafkaSettings`, separate from
   `app.config.Settings`, so running this demo never changes how the real
   app boots or what env vars it requires.

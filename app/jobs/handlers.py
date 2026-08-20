@@ -82,6 +82,43 @@ def handle_backfill_installation(job: dict) -> None:
     queue.update_progress(job["id"], progress)
 
 
+def handle_consolidate_memory(job: dict) -> None:
+    """Distil episodic events into semantic memory for one tenant.
+
+    Runs on the worker rather than in the ingest path: compaction is not
+    something a webhook should wait on, and a failed consolidation should
+    retry on the queue's backoff rather than fail an inbound delivery."""
+    from app.memory import consolidate
+
+    scope = job["payload"]["scope"]
+    limit = job["payload"].get("limit")
+
+    progress = {"state": "running", "scope": scope, "done": 0, "total": 0}
+    queue.update_progress(job["id"], progress)
+
+    def report(done: int, total: int) -> None:
+        progress.update(done=done, total=total)
+        queue.update_progress(job["id"], progress)
+
+    result = consolidate.consolidate_scope(scope, limit=limit, progress=report)
+    progress.update(state="done", **result)
+    queue.update_progress(job["id"], progress)
+
+
+def enqueue_due_consolidations() -> list[int]:
+    """Queue a consolidation per tenant that has enough pending events.
+    Called by the worker on an interval — the queue itself has no scheduler,
+    and one poll loop is cheaper than adding cron to the deployment."""
+    from app.memory import consolidate
+
+    job_ids = []
+    for scope, pending in consolidate.due_scopes():
+        job_ids.append(queue.enqueue("consolidate_memory", {"scope": scope}))
+        logger.info("queued consolidation for %s (%d pending)", scope, pending)
+    return job_ids
+
+
 HANDLERS = {
     "backfill_installation": handle_backfill_installation,
+    "consolidate_memory": handle_consolidate_memory,
 }
