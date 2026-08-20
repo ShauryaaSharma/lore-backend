@@ -99,9 +99,11 @@ python -m app.eval.harness --judge      # add LLM-as-judge (LIVE only)
 ```
 
 A golden question set scored for citation accuracy and relevance.
-Deterministic in MOCK mode, so `tests/test_eval_harness.py` gates CI on a
-hit-rate floor. The LLM judge is observe-only until its scores have been
-checked against human reading.
+Deterministic in MOCK mode, so `tests/test_eval_harness.py` holds a hit-rate
+floor as part of `pytest`, and the harness itself exits non-zero when the
+gate fails — run it before merging anything that touches retrieval. The LLM
+judge is observe-only until its scores have been checked against human
+reading.
 
 The `--compare` mode is why the v1 pipeline is still in the tree: the loop
 has to out-perform something. Note that the agent path is non-deterministic —
@@ -131,7 +133,7 @@ knowing:
 | `VECTOR_STORE` | `qdrant` | Or `pgvector` to reuse the same Postgres |
 | `CONSOLIDATE_AFTER_N_EVENTS` | `25` | When the summarizer distils a tenant's backlog |
 | `JUDGE_ENABLED` | `false` | LLM-as-judge in the eval report |
-| `EVAL_HIT_RATE_FLOOR` | `0.9` | What CI actually enforces |
+| `EVAL_HIT_RATE_FLOOR` | `0.9` | What the eval gate enforces |
 
 ## Local dev (no Docker)
 

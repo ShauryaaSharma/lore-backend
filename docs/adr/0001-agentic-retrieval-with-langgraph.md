@@ -77,7 +77,7 @@ Concretely:
      events into semantic facts after N new PRs, bounding vector-store growth.
 5. **LLM Ops.** Langfuse (self-hosted, added to `docker-compose.yml`) emits one
    trace per graph run. `app/eval/` becomes the *Eval* stage, extended with an
-   LLM-as-judge rubric pass. A **Gate** in CI compares scores to a floor: pass →
+   LLM-as-judge rubric pass. A **Gate** compares scores to a floor: pass →
    release (git-tagged prompt + RAG config), fail → diagnose against the trace.
 
 ## Options considered
@@ -245,7 +245,14 @@ we can promise.
 
 ## Implementation notes
 
-Two things landed differently from the plan above, both deliberate:
+Three things landed differently from the plan above, all deliberate:
+
+**The gate is not wired to CI.** This ADR assumed a GitHub Actions workflow
+would run it. The workflow has since been removed from the repo, so "the
+gate" means `tests/test_eval_harness.py` inside `pytest`, plus
+`python -m app.eval.harness`, which exits non-zero when the floors are
+missed. The scoring and the floors are unchanged; only what invokes them is.
+Re-attaching it to a pipeline later is a workflow file, not a code change.
 
 **Ingestion writes through to both stores.** The plan implied events land in
 episodic memory and reach semantic memory only via consolidation. That would

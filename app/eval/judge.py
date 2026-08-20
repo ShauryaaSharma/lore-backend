@@ -10,8 +10,8 @@ memory like every other prompt, so changing how answers are graded is a
 reviewable diff.
 
 **Observe-only by default** (`JUDGE_ENABLED=false`). A judge that hasn't
-been shown to agree with human reading is a metric, not a gate; turning it
-into CI policy before that is how teams end up optimising for a model's
+been shown to agree with human reading is a metric, not a gate; making it
+merge policy before that is how teams end up optimising for a model's
 taste. Record the scores first, gate once they've earned it.
 """
 

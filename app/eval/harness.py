@@ -8,7 +8,9 @@ Runs `GOLDEN_SET` through `canon.answer_why` and scores each case:
                   observe-only until it's earned the right to gate.
 
 In MOCK mode this is deterministic and needs no API keys, so
-`tests/test_eval_harness.py` runs it as a CI gate. In LIVE mode it exercises
+`tests/test_eval_harness.py` runs it as a regression gate inside the normal
+test suite, and `main()` exits non-zero when the gate fails so it can be
+wired into whatever runs before a merge. In LIVE mode it exercises
 the real path — agent loop or v1 pipeline, whichever is enabled — which is
 what makes the two comparable: same questions, same store, same scoring.
 
@@ -181,8 +183,8 @@ def main() -> None:
         _compare(args.scope)
         return
 
-    # Exit non-zero when the gate fails, so CI actually blocks on it rather
-    # than printing "FAIL" into a green build.
+    # Exit non-zero when the gate fails. A gate that only prints "FAIL" and
+    # returns 0 is not a gate — whatever runs this needs to be able to stop.
     passed = _print_report(run_eval(args.scope, with_judge=args.judge or None))
     raise SystemExit(0 if passed else 1)
 
