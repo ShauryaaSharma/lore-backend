@@ -1,12 +1,25 @@
 """Unit tests for the Kafka demo — mock the kafka client entirely, so these
-run without a broker and without touching the real app.config/canon setup."""
+run without a broker and without touching the real app.config/canon setup.
+
+Skipped unless `kafka-python` is installed. The demo keeps its dependency in
+its own requirements file precisely so the main install stays lean, which
+means the import can legitimately be absent — a missing optional dependency
+should skip these, not fail the whole run.
+"""
 
 from unittest.mock import MagicMock
 
-from app.examples.kafka_ingestion.consumer import handle_event
-from app.examples.kafka_ingestion.events import sample_event
-from app.examples.kafka_ingestion.producer import publish_pr_merged
-from app.examples.kafka_ingestion.settings import kafka_settings
+import pytest
+
+pytest.importorskip(
+    "kafka",
+    reason="demo-only dependency: pip install -r app/examples/kafka_ingestion/requirements.txt",
+)
+
+from app.examples.kafka_ingestion.consumer import handle_event  # noqa: E402
+from app.examples.kafka_ingestion.events import sample_event  # noqa: E402
+from app.examples.kafka_ingestion.producer import publish_pr_merged  # noqa: E402
+from app.examples.kafka_ingestion.settings import kafka_settings  # noqa: E402
 
 
 def test_publish_pr_merged_sends_keyed_by_repo():

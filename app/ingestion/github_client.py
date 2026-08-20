@@ -237,6 +237,56 @@ def list_open_prs(token: str, owner: str, repo: str, limit: int = 50) -> list[di
     return resp.json() if resp.status_code == 200 else []
 
 
+def fetch_pr(token: str, owner: str, repo: str, number: int) -> Optional[dict]:
+    """One PR by number — the agent's escape hatch when the Canon has no
+    decision for something the question names explicitly."""
+    resp = _request("GET", f"{API}/repos/{owner}/{repo}/pulls/{number}",
+                    headers=_headers(token))
+    return resp.json() if resp.status_code == 200 else None
+
+
+def fetch_pr_files(token: str, owner: str, repo: str, number: int,
+                   max_files: int = 20) -> list[dict]:
+    """Changed files, not the raw patch. What was touched is the part that
+    explains a decision; the diff hunks are mostly tokens the model has to
+    read past."""
+    resp = _request(
+        "GET", f"{API}/repos/{owner}/{repo}/pulls/{number}/files?per_page={max_files}",
+        headers=_headers(token),
+    )
+    if resp.status_code != 200:
+        return []
+    return [
+        {"filename": f.get("filename", ""), "status": f.get("status", ""),
+         "additions": f.get("additions", 0), "deletions": f.get("deletions", 0)}
+        for f in resp.json()
+    ]
+
+
+def search_commits(token: str, query: str, repo: str = "", limit: int = 10) -> list[dict]:
+    """Commit-message search. Catches decisions recorded as a `Why:` trailer
+    by the CLI but never surfaced in a PR discussion."""
+    q = f"{query} repo:{repo}" if repo else query
+    resp = _request(
+        "GET", f"{API}/search/commits?q={requests.utils.quote(q)}&per_page={limit}",
+        headers={**_headers(token), "Accept": "application/vnd.github.cloak-preview+json"},
+    )
+    if resp.status_code != 200:
+        return []
+    out = []
+    for item in resp.json().get("items", []):
+        commit = item.get("commit", {}) or {}
+        out.append({
+            "sha": (item.get("sha") or "")[:7],
+            "message": (commit.get("message") or "").strip(),
+            "author": ((commit.get("author") or {}).get("name") or ""),
+            "date": ((commit.get("author") or {}).get("date") or "")[:10],
+            "repo": ((item.get("repository") or {}).get("full_name") or ""),
+            "url": item.get("html_url", ""),
+        })
+    return out
+
+
 def post_issue_comment(token: str, owner: str, repo: str, number: int,
                        body: str) -> bool:
     resp = _request(

@@ -1,6 +1,6 @@
 """Golden Q&A set for the `/why` regression harness. Each case targets one
 entry in `app.retrieval.seed_decisions.SEED_DECISIONS`, so the harness runs
-deterministically in MOCK mode with zero API keys — this is a CI regression
+deterministically in MOCK mode with zero API keys — this is a regression
 gate against retrieval/reranking breakage, not an exhaustive quality
 benchmark. Run it against LIVE mode (after `POST /v1/ingest/seed`) to see
 the same questions through the real mem0 + rerank + Groq path."""
