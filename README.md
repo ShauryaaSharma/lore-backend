@@ -1,5 +1,9 @@
 # lore-backend
 
+[![PyPI](https://img.shields.io/pypi/v/lore-backend.svg)](https://pypi.org/project/lore-backend/)
+[![Python](https://img.shields.io/pypi/pyversions/lore-backend.svg)](https://pypi.org/project/lore-backend/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 The FastAPI service behind [Lore](https://github.com/lorehasit) — an engineering
 team's decision memory. Captures the *why* behind merged pull requests (via a
 GitHub App) and answers `/why` questions with cited, sourced answers.
@@ -38,6 +42,8 @@ Postgres, Qdrant, the API and the worker, in one command.
 memory live in Postgres regardless.
 
 ## Install from PyPI
+
+Published at [pypi.org/project/lore-backend](https://pypi.org/project/lore-backend/).
 
 `docker compose up` stays the recommended way to run Lore — it brings its own
 Postgres and Qdrant. The package is for embedding the service in an existing
