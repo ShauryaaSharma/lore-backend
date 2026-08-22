@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.config import settings
-from app.memory import consolidate, episodic
+from lore_backend.config import settings
+from lore_backend.memory import consolidate, episodic
 
 SCOPE = "gh:acme"
 
@@ -42,7 +42,7 @@ def written(monkeypatch):
     """Capture semantic writes instead of embedding anything."""
     calls = []
     monkeypatch.setattr(
-        "app.memory.semantic.remember",
+        "lore_backend.memory.semantic.remember",
         lambda scope, *, text, source, metadata=None: calls.append(
             {"scope": scope, "text": text, "source": source, "metadata": metadata or {}}),
     )

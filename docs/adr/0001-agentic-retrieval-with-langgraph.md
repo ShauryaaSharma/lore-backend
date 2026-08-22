@@ -10,7 +10,7 @@
 ## Context
 
 `/why` is currently a fixed retrieval pipeline. Every request runs the same five
-steps in the same order (`app/retrieval/canon.py`):
+steps in the same order (`lore_backend/retrieval/canon.py`):
 
 1. Embed the question (fastembed, CPU/ONNX).
 2. Pull `RERANK_CANDIDATES` (20) hits from the vector store via mem0.
@@ -18,7 +18,7 @@ steps in the same order (`app/retrieval/canon.py`):
 4. Compose an answer with Groq (`llama-3.3-70b-versatile`).
 5. Return the answer plus citations.
 
-This works, is cheap, and is deterministic enough that `app/eval/` can gate CI on
+This works, is cheap, and is deterministic enough that `lore_backend/eval/` can gate CI on
 it. It has one structural limit that no amount of tuning fixes:
 
 **The pipeline can only answer from what has already been ingested.** When the
@@ -37,14 +37,14 @@ Three forces push on this now:
   to behave), distilled decisions (durable facts), and raw dated events all live
   in the same place and are all retrieved the same way, even though only one of
   them is genuinely a semantic-similarity problem.
-- **Answer quality is unobservable in production.** `app/eval/` gates CI against
+- **Answer quality is unobservable in production.** `lore_backend/eval/` gates CI against
   a 6-case golden set in MOCK mode. There is no per-request trace, so a
   regression in LIVE mode is diagnosed by guesswork.
 
 **Constraints:**
 
 - Must run on free tiers / self-hosted only. No new recurring cloud spend.
-- Must be incrementally shippable. A big-bang rewrite of `app/retrieval/` is not
+- Must be incrementally shippable. A big-bang rewrite of `lore_backend/retrieval/` is not
   acceptable — the current path has to keep working throughout.
 - CPU-only. No GPU in the deployment target.
 - Small team; maintenance burden is a first-class cost, not a footnote.
@@ -61,8 +61,8 @@ Concretely:
    Graph state (`messages`, auth scope, surface) is ephemeral per run.
 2. **Loop.** The model is given tools instead of a hardcoded retrieval step:
    `search_canon()`, `fetch_pr_diff()`, `search_commits()`, `post_comment()`.
-   Most of these wrap clients that already exist in `app/ingestion/` and
-   `app/retrieval/`. Capped at **4 hops**; exceeding the cap is a hard failure,
+   Most of these wrap clients that already exist in `lore_backend/ingestion/` and
+   `lore_backend/retrieval/`. Capped at **4 hops**; exceeding the cap is a hard failure,
    not a degraded answer.
 3. **Guardrail.** Before returning, every claim in the answer must map to a
    decision ID present in the tool results. Unsupported claims fail the run
@@ -76,7 +76,7 @@ Concretely:
    - A **summarizer agent** (Groq `llama-3.1-8b`) periodically distills episodic
      events into semantic facts after N new PRs, bounding vector-store growth.
 5. **LLM Ops.** Langfuse (self-hosted, added to `docker-compose.yml`) emits one
-   trace per graph run. `app/eval/` becomes the *Eval* stage, extended with an
+   trace per graph run. `lore_backend/eval/` becomes the *Eval* stage, extended with an
    LLM-as-judge rubric pass. A **Gate** compares scores to a floor: pass →
    release (git-tagged prompt + RAG config), fail → diagnose against the trace.
 
@@ -222,14 +222,14 @@ we can promise.
 ## Action items
 
 1. [x] Add Langfuse as a compose overlay and instrument the request path
-       (`app/obs/tracing.py`, `docker-compose.langfuse.yml`).
+       (`lore_backend/obs/tracing.py`, `docker-compose.langfuse.yml`).
 2. [x] Put the agent behind `AGENT_LOOP_ENABLED`, with the v1 pipeline still
        reachable as the comparison baseline.
 3. [x] Implement `search_canon` / `recent_decisions` / `fetch_pr_diff` /
        `search_commits` as tools over the existing Canon and GitHub clients
-       (`app/agent/tools.py`).
+       (`lore_backend/agent/tools.py`).
 4. [x] Enable multi-hop with the 4-hop cap enforced in the router;
-       `python -m app.eval.harness --compare` scores both paths on the same
+       `python -m lore_backend.eval.harness --compare` scores both paths on the same
        store.
 5. [x] Split memory tiers: `prompts/*.md`, the episodic SQL retriever
        (`migrations/0002_memory_layer.sql`), and the summarizer on the
@@ -250,7 +250,7 @@ Three things landed differently from the plan above, all deliberate:
 **The gate is not wired to CI.** This ADR assumed a GitHub Actions workflow
 would run it. The workflow has since been removed from the repo, so "the
 gate" means `tests/test_eval_harness.py` inside `pytest`, plus
-`python -m app.eval.harness`, which exits non-zero when the floors are
+`python -m lore_backend.eval.harness`, which exits non-zero when the floors are
 missed. The scoring and the floors are unchanged; only what invokes them is.
 Re-attaching it to a pipeline later is a workflow file, not a code change.
 

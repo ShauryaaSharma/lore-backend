@@ -1,4 +1,4 @@
-from app.storage.queries import get_idempotent_response, store_idempotent_response
+from lore_backend.storage.queries import get_idempotent_response, store_idempotent_response
 
 
 def test_first_write_is_stored():

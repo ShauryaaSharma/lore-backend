@@ -1,4 +1,4 @@
-from app.auth.keys import create_key, resolve, revoke
+from lore_backend.auth.keys import create_key, resolve, revoke
 
 
 def test_create_key_resolves_to_its_tenant_scope():

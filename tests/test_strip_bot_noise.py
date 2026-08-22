@@ -1,4 +1,4 @@
-from app.retrieval.summarize import strip_bot_noise
+from lore_backend.retrieval.summarize import strip_bot_noise
 
 
 def test_strips_vercel_status_token():

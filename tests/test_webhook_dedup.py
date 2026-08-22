@@ -1,4 +1,4 @@
-from app.ingestion.dedup import is_new_delivery
+from lore_backend.ingestion.dedup import is_new_delivery
 
 
 def test_first_delivery_is_new():

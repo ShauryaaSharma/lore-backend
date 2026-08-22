@@ -3,7 +3,7 @@ one, so its edge cases are worth being explicit about."""
 
 from __future__ import annotations
 
-from app.agent import guardrail
+from lore_backend.agent import guardrail
 
 
 def hit(source: str, text: str = "some decision text") -> dict:

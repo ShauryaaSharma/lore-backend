@@ -13,15 +13,15 @@ Implemented per [ADR-0001](docs/adr/0001-agentic-retrieval-with-langgraph.md).
 
 | Region | What it is | Where |
 |---|---|---|
-| **Harness** | A LangGraph `StateGraph`, one compiled graph per run | `app/agent/` |
-| **Loop** | The model with tools, capped at 4 hops | `app/agent/tools.py` |
-| **Memory** | Three tiers: procedural, semantic, episodic | `app/memory/` |
-| **LLM Ops** | Trace → observe → eval → gate | `app/obs/`, `app/eval/` |
+| **Harness** | A LangGraph `StateGraph`, one compiled graph per run | `lore_backend/agent/` |
+| **Loop** | The model with tools, capped at 4 hops | `lore_backend/agent/tools.py` |
+| **Memory** | Three tiers: procedural, semantic, episodic | `lore_backend/memory/` |
+| **LLM Ops** | Trace → observe → eval → gate | `lore_backend/obs/`, `lore_backend/eval/` |
 
 ## Module map
 
 ```
-app/
+lore_backend/
   main.py       FastAPI app factory — migrations on boot, CORS, request-id
                  middleware, trace flush on shutdown
   config.py     Pydantic-settings Settings — one source of truth, fails fast
@@ -86,7 +86,7 @@ Two properties are enforced in code rather than asked for in the prompt:
 
 - **Scope is bound, not passed.** Tools close over the scope resolved from
   the caller's API key, so the model has no way to name a tenant. Tools are
-  built per request for this reason (`app/agent/tools.py`).
+  built per request for this reason (`lore_backend/agent/tools.py`).
 - **The hop cap terminates the loop.** At `AGENT_MAX_HOPS` the router sends
   the run to the guardrail regardless of what the model wants. A runaway
   loop fails loud instead of burning the Groq quota.
@@ -151,7 +151,7 @@ guardrail verdict, the prompt fingerprint. `trace_id` is stored on the
 `why_queries` row, so a bad answer in the database opens as a trace in the
 UI.
 
-Two rules hold throughout `app/obs/`: tracing never raises into the caller,
+Two rules hold throughout `lore_backend/obs/`: tracing never raises into the caller,
 and never blocks the answer (spans flush at shutdown). Unconfigured, the
 whole layer is a null object.
 
@@ -164,7 +164,7 @@ been checked against human reading is a metric, not a policy, and gating on
 it early means optimising for a model's taste.
 
 ```bash
-python -m app.eval.harness --compare
+python -m lore_backend.eval.harness --compare
 ```
 
 Scores the v1 pipeline and the v2 agent back to back on the same store —
@@ -219,6 +219,6 @@ so a plain Postgres without the extension can still run the control plane.
 ## What's deliberately not here
 
 A modular monolith on purpose — no Kafka, no service mesh, no sharding in the
-real ingestion path. `app/examples/kafka_ingestion/` is a self-contained demo
+real ingestion path. `lore_backend/examples/kafka_ingestion/` is a self-contained demo
 of what a streaming path *would* look like, isolated so it can be deleted
 without touching production code.

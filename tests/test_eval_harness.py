@@ -1,4 +1,4 @@
-from app.eval.harness import run_eval
+from lore_backend.eval.harness import run_eval
 
 
 def test_golden_set_regression_gate():

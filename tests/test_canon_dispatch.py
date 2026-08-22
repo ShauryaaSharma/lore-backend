@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.config import settings
-from app.memory import episodic
-from app.memory.semantic import Hit
-from app.retrieval import canon
+from lore_backend.config import settings
+from lore_backend.memory import episodic
+from lore_backend.memory.semantic import Hit
+from lore_backend.retrieval import canon
 
 SCOPE = "gh:acme"
 
@@ -45,7 +45,7 @@ def test_live_mode_dispatches_to_the_agent_loop(monkeypatch):
                 "mode": "live", "path": "agent", "hops": 2,
                 "trace_id": "t1", "latency_s": 0.4}
 
-    monkeypatch.setattr("app.agent.graph.run", fake_run)
+    monkeypatch.setattr("lore_backend.agent.graph.run", fake_run)
 
     result = canon.answer_why("why?", SCOPE)
 
@@ -62,7 +62,7 @@ def test_the_flag_falls_back_to_the_v1_pipeline(monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "test-key")
     monkeypatch.setattr(settings, "agent_loop_enabled", False)
     monkeypatch.setattr(settings, "rerank_enabled", False)
-    monkeypatch.setattr("app.memory.semantic.search", lambda *a, **k: [])
+    monkeypatch.setattr("lore_backend.memory.semantic.search", lambda *a, **k: [])
 
     result = canon.answer_why("why?", SCOPE)
 
@@ -77,7 +77,7 @@ def test_pipeline_applies_the_same_guardrail_as_the_agent(monkeypatch):
     monkeypatch.setattr(settings, "agent_loop_enabled", False)
     monkeypatch.setattr(settings, "rerank_enabled", False)
     monkeypatch.setattr(
-        "app.memory.semantic.search",
+        "lore_backend.memory.semantic.search",
         lambda *a, **k: [Hit(id="pr-1", text="a real decision",
                              metadata={"source": "PR #1"}, score=0.9)],
     )

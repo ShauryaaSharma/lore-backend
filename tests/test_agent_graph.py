@@ -11,10 +11,10 @@ from __future__ import annotations
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agent import graph as agent_graph
-from app.agent.tools import Collector
-from app.config import settings
-from app.memory.semantic import Hit
+from lore_backend.agent import graph as agent_graph
+from lore_backend.agent.tools import Collector
+from lore_backend.config import settings
+from lore_backend.memory.semantic import Hit
 
 
 class FakeLLM:
@@ -41,14 +41,14 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(settings, "rerank_enabled", False)
     monkeypatch.setattr(settings, "groq_api_key", "test-key")
     monkeypatch.setattr(
-        "app.memory.semantic.search",
+        "lore_backend.memory.semantic.search",
         lambda scope, query, limit=20: [
             Hit(id="pr-482", text="We moved off server-side sessions after a Redis "
                                   "failover logged everyone out.",
                 metadata={"source": "PR #482", "repo": "acme/api"}, score=0.9),
         ],
     )
-    monkeypatch.setattr("app.memory.episodic.record_query", lambda *a, **k: None)
+    monkeypatch.setattr("lore_backend.memory.episodic.record_query", lambda *a, **k: None)
 
 
 def run_with(monkeypatch, replies: list[AIMessage], scope: str = "gh:acme"):
@@ -103,7 +103,7 @@ def test_tool_failure_is_reported_to_the_model_not_raised(monkeypatch):
     def boom(scope, query, limit=20):
         raise RuntimeError("qdrant is down")
 
-    monkeypatch.setattr("app.memory.semantic.search", boom)
+    monkeypatch.setattr("lore_backend.memory.semantic.search", boom)
     result = run_with(monkeypatch, [
         tool_call("search_canon", {"query": "sessions"}),
         AIMessage(content="I don't have a recorded decision for that yet."),
@@ -134,7 +134,7 @@ def test_scope_is_bound_not_model_controlled(monkeypatch):
         seen["scope"] = scope
         return []
 
-    monkeypatch.setattr("app.memory.semantic.search", spy)
+    monkeypatch.setattr("lore_backend.memory.semantic.search", spy)
     run_with(monkeypatch, [
         tool_call("search_canon", {"query": "anything"}),
         AIMessage(content="No record of that."),

@@ -37,6 +37,24 @@ Postgres, Qdrant, the API and the worker, in one command.
 `DATABASE_URL` is required in both modes — the control plane and episodic
 memory live in Postgres regardless.
 
+## Install from PyPI
+
+`docker compose up` stays the recommended way to run Lore — it brings its own
+Postgres and Qdrant. The package is for embedding the service in an existing
+deployment, or importing the memory layer directly:
+
+```bash
+pip install lore-backend
+export DATABASE_URL=postgresql://lore:lore@localhost:5432/lore
+lore-backend                 # the API server (--host/--port/--reload)
+lore-backend-worker          # the background job worker
+```
+
+Both scripts read the same environment as the Docker stack (see
+[.env.example](.env.example)); you supply Postgres and Qdrant yourself.
+Prompts and migrations ship inside the package, so procedural memory and the
+migration runner work from an install with no checkout.
+
 ## Tech stack
 
 | Layer | Choice | Cost |
@@ -93,9 +111,9 @@ Details in [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Eval
 
 ```bash
-python -m app.eval.harness              # score the active path
-python -m app.eval.harness --compare    # v1 pipeline vs v2 agent, same store
-python -m app.eval.harness --judge      # add LLM-as-judge (LIVE only)
+python -m lore_backend.eval.harness              # score the active path
+python -m lore_backend.eval.harness --compare    # v1 pipeline vs v2 agent, same store
+python -m lore_backend.eval.harness --judge      # add LLM-as-judge (LIVE only)
 ```
 
 A golden question set scored for citation accuracy and relevance.
@@ -141,9 +159,9 @@ knowing:
 python -m venv .venv && . .venv/Scripts/activate  # or source .venv/bin/activate
 pip install -r requirements.txt
 # Needs a reachable Postgres — `docker compose up postgres` or your own.
-uvicorn app.main:app --reload --port 8000
+uvicorn lore_backend.main:app --reload --port 8000
 # in another terminal:
-python -m app.jobs.worker
+python -m lore_backend.jobs.worker
 ```
 
 ## Testing
@@ -159,10 +177,10 @@ summarizer are driven by scripted fakes, so the suite makes no network calls
 and needs no API keys.
 
 `tests/test_kafka_ingestion_demo.py` needs the demo's own optional
-dependency (`app/examples/kafka_ingestion/requirements.txt`).
+dependency (`lore_backend/examples/kafka_ingestion/requirements.txt`).
 
 ## Deploying the GitHub App
 
 Point the App's webhook URL at `<your-host>/webhook/github` and set
 `GITHUB_WEBHOOK_SECRET` / `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`. The
-payload shapes handled are in `app/ingestion/webhook_handler.py`.
+payload shapes handled are in `lore_backend/ingestion/webhook_handler.py`.
