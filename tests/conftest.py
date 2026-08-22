@@ -1,6 +1,6 @@
 import os
 
-# Must happen before any `app.*` import: `app.config.settings` is built at
+# Must happen before any `lore_backend.*` import: `lore_backend.config.settings` is built at
 # import time and requires DATABASE_URL to validate.
 os.environ.setdefault("DATABASE_URL", "postgresql://lore:lore@localhost:5432/lore")
 os.environ.setdefault("VECTOR_STORE", "qdrant")  # keep the Canon itself dependency-light in tests
@@ -8,7 +8,7 @@ os.environ.setdefault("LORE_ADMIN_SECRET", "test-admin-secret")
 
 import pytest  # noqa: E402
 
-from app.storage.db import get_conn, run_migrations  # noqa: E402
+from lore_backend.storage.db import get_conn, run_migrations  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -35,6 +35,6 @@ def _clean_control_plane():
 def client():
     from fastapi.testclient import TestClient
 
-    from app.main import app
+    from lore_backend.main import app
 
     return TestClient(app)

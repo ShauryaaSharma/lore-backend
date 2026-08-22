@@ -1,4 +1,4 @@
-from app.jobs import queue
+from lore_backend.jobs import queue
 
 
 def test_enqueue_and_claim():

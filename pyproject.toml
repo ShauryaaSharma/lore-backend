@@ -1,3 +1,95 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lore-backend"
+dynamic = ["version"]
+description = "An engineering team's decision memory — captures the why behind merged PRs and answers /why with cited sources."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Shaurya Sharma", email = "shauryasofficial27@gmail.com" }]
+keywords = ["langgraph", "agent", "fastapi", "rag", "developer-tools", "github-app"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+
+# Kept in sync with requirements.txt, which stays the source of truth for the
+# Docker image. Lower bounds only: this is an application, and pinning here
+# would fight whatever the installing environment already has.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.2",
+    "PyJWT[crypto]>=2.8",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain-groq>=0.2.0",
+    "qdrant-client>=1.9.0",
+    "groq>=0.3.0",
+    "fastembed>=0.2.0",
+    "langfuse>=2.36.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+    "ruff==0.15.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/ShauryaaSharma/lore-backend"
+Documentation = "https://github.com/ShauryaaSharma/lore-backend/blob/main/ARCHITECTURE.md"
+Issues = "https://github.com/ShauryaaSharma/lore-backend/issues"
+
+[project.scripts]
+lore-backend = "lore_backend.cli:serve"
+lore-backend-worker = "lore_backend.cli:worker"
+
+[tool.hatch.version]
+path = "lore_backend/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lore_backend"]
+
+# prompts/ and migrations/ live at the repo root for a checkout, but an
+# installed package has no repo root — copy them under the package so
+# `lore_backend.paths.data_dir` finds them either way.
+[tool.hatch.build.targets.wheel.force-include]
+"prompts" = "lore_backend/prompts"
+"migrations" = "lore_backend/migrations"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/lore_backend",
+    "/prompts",
+    "/migrations",
+    "/tests",
+    "/docs",
+    "/README.md",
+    "/ARCHITECTURE.md",
+    "/LICENSE",
+    "/requirements.txt",
+    "/Dockerfile",
+    "/docker-compose.yml",
+    "/.env.example",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.config import settings
-from app.memory import procedural
+from lore_backend.config import settings
+from lore_backend.memory import procedural
 
 
 def test_all_expected_prompts_exist():
