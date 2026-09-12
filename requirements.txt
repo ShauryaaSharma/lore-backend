@@ -1,0 +1,25 @@
+# Core API
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic-settings>=2.2
+python-dotenv>=1.0
+requests>=2.31
+
+# Control plane storage (tenants, api keys, jobs, webhook dedup, idempotency)
+psycopg[binary]>=3.1
+psycopg-pool>=3.2
+
+# GitHub App auth — sign the app JWT (RS256) to mint installation tokens.
+PyJWT[crypto]>=2.8
+
+# Live mode — real memory (only exercised once GROQ_API_KEY is set).
+# Safe to install now; the backend runs in mock mode without any keys.
+mem0ai>=0.1.0
+groq>=0.3.0
+fastembed>=0.2.0
+
+# Test / lint (dev only — split into requirements-dev.txt if the image
+# should stay lean; kept together here since this is a small project)
+pytest>=8.0
+pytest-mock>=3.14
+ruff>=0.6
