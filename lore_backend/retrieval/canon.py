@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from lore_backend.config import settings
-from lore_backend.memory import episodic, procedural, semantic
+from lore_backend.memory import episodic, graph, procedural, semantic
 from lore_backend.retrieval.seed_decisions import SEED_DECISIONS
 from lore_backend.retrieval.summarize import strip_bot_noise
 
@@ -89,8 +89,10 @@ def ingest_seed(scope: str) -> dict:
 
 
 def inscribe_pr(scope: str, *, number: int, title: str, body: str, threads: str,
-                author: str, repo_full: str, url: str, merged_at: str) -> None:
-    """Store a merged PR's discussion as a decision."""
+                author: str, repo_full: str, url: str, merged_at: str,
+                files: Optional[list[dict]] = None) -> None:
+    """Store a merged PR's discussion as a decision, and index its links to
+    other decisions and the files it changed (`files=None`: not fetched)."""
     clean_body = strip_bot_noise(body)
     clean_threads = strip_bot_noise(threads)
     text = f"PR #{number}: {title}" + (f"\n\n{clean_body}" if clean_body else "")
@@ -104,6 +106,8 @@ def inscribe_pr(scope: str, *, number: int, title: str, body: str, threads: str,
     episodic.record_event(scope, kind="pr", source=source, title=title,
                           body=text, author=author, repo=repo_full, url=url,
                           occurred_at=merged_at or None)
+    graph.index_decision(scope, source, title=title, body=clean_body,
+                         discussion=clean_threads, repo=repo_full, files=files)
     semantic.remember(scope, text=text, source=source, metadata=metadata)
 
 
@@ -127,6 +131,7 @@ def inscribe_commit(commit: dict, scope: str) -> dict:
     source = f"commit {sha}"
     episodic.record_event(scope, kind="commit", source=source, title=subject,
                           body=text, author=author, repo=repo)
+    graph.index_decision(scope, source, title=subject, body=why, repo=repo)
     semantic.remember(scope, text=text, source=source,
                       metadata={"title": subject[:80], "author": author,
                                 "repo": repo, "canon": repo})
