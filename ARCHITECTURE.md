@@ -15,7 +15,7 @@ Implemented per [ADR-0001](docs/adr/0001-agentic-retrieval-with-langgraph.md).
 |---|---|---|
 | **Harness** | A LangGraph `StateGraph`, one compiled graph per run | `lore_backend/agent/` |
 | **Loop** | The model with tools, capped at 4 hops | `lore_backend/agent/tools.py` |
-| **Memory** | Three tiers: procedural, semantic, episodic | `lore_backend/memory/` |
+| **Memory** | Three tiers: procedural, semantic, episodic; plus the decision graph | `lore_backend/memory/` |
 | **LLM Ops** | Trace → observe → eval → gate | `lore_backend/obs/`, `lore_backend/eval/` |
 
 ## Module map
@@ -131,6 +131,36 @@ nearest-neighbour; running it through embeddings returns decisions that
 *sound* recent, which is subtly wrong rather than merely slow. The
 control-plane database was already holding most of this — this gives it a
 retrieval path instead of leaving it write-only.
+
+**Decision graph** — *is it still true?* Postgres (`decision_links`,
+`decision_files`). Neither tier above can tell a current decision from one a
+later PR reverted; both read as equally authoritative forever.
+
+- *Edges are extracted, not inferred.* `ingestion/links.py` reads
+  supersedes / reverts / references from PR titles and bodies with fixed
+  patterns and keeps the matching sentence as evidence. An edge saying one
+  decision overturned another changes what `/why` may present as current —
+  not a claim to hand to a model. Review comments only ever produce plain
+  references: "does this supersede #8?" is a question. Closing keywords
+  ("Fixes #40") are skipped because they point at issues.
+- *Edges may dangle.* "Supersedes #12" is true even when #12 predates the
+  backfill window, so there are no foreign keys; the edge is reported as
+  unresolved and starts counting once #12 is ingested.
+- *Status is computed on read.* A recursive CTE walks the overturning edges
+  around a decision (both directions, cycle-guarded, depth-capped), and
+  `_status` decides in Python: overturned unless the overturner was itself
+  reverted. Edges on a cycle, from unmerged PRs, or from decisions Lore has
+  not ingested do not count. Storing status would mean recomputing every
+  downstream node whenever an edge arrives.
+- *The agent uses it.* `decision_status` and `decisions_for_path` are tools,
+  and the tool policy tells the model to check a decision before presenting
+  it as current. Decisions they name are added to the collector, so the
+  guardrail accepts a citation of the PR that replaced one.
+
+Known limit: a decision's id is `PR #N`, unique per account scope, so two
+repositories in one account with the same PR number collide. That predates
+the graph; the extractor at least drops references qualified with a
+different repository.
 
 ### Write-through, then compact
 

@@ -72,15 +72,17 @@ def handle_pull_request_event(payload: dict) -> dict:
                 "pr": number, "note": "set GROQ_API_KEY to capture"}
 
     threads = ""
+    files = None
     if install_id and gh.app_configured():
         token = gh.installation_token(install_id)
         if token:
             threads = gh.fetch_pr_threads(token, owner, repo_name, number)
+            files = gh.fetch_pr_files(token, owner, repo_name, number, max_files=100)
 
     canon.inscribe_pr(
         scope, number=number, title=title, body=body, threads=threads,
         author=author, repo_full=repo_full, url=url,
-        merged_at=pr.get("merged_at") or "",
+        merged_at=pr.get("merged_at") or "", files=files,
     )
     return {"ok": True, "captured": True, "pr": number, "repo": repo_full, "scope": scope}
 

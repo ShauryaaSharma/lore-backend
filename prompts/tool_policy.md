@@ -18,6 +18,11 @@ question:**
 - The question is about *when* or *recently* → use `recent_decisions`, which
   orders by date instead of similarity. Vector search cannot answer "what did
   we decide last month".
+- The question names a file or directory rather than a topic → use
+  `decisions_for_path`.
+- You are about to rest the answer on a decision that is not recent → check
+  it with `decision_status` first. A superseded or reverted decision is
+  history, not the current answer: say what replaced it.
 - Nothing plausibly matches and you have no specific handle to chase → stop
   and say the Canon has no record. Do not keep searching with reworded
   queries; if two different phrasings return nothing useful, a third will

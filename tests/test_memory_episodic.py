@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from lore_backend.memory import episodic
 
 SCOPE = "gh:acme"
@@ -72,8 +74,10 @@ def test_scopes_with_pending_respects_the_threshold():
 
 
 def test_since_days_filters_out_old_decisions():
+    # Relative to now: a fixed "recent" date silently ages out of the window.
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     _event("PR #old", "2020-01-01T00:00:00Z")
-    _event("PR #new", "2026-08-19T00:00:00Z")
+    _event("PR #new", yesterday)
     recent = [e["source"] for e in episodic.recent(SCOPE, limit=10, since_days=30)]
     assert recent == ["PR #new"]
 
