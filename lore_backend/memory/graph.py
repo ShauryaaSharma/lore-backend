@@ -263,6 +263,64 @@ def decisions_touching(scope: str, path: str, limit: int = 20) -> list[dict]:
     ]
 
 
+def decisions_for_files(scope: str, paths: list[str], *, limit: int = 5,
+                        exclude: str = "") -> dict:
+    """The decisions still in force behind a set of changed files -- what a
+    reviewer should know before approving a change to them.
+
+    Two strengths of match: a decision that changed the *same file*, and one
+    that changed a sibling in the *same directory*. Exact overlap ranks
+    first, then nearby overlap, then recency. Root-level files have no
+    directory worth matching on (every README edit is not related), so they
+    only ever match exactly. Unmerged PRs are not decisions and are skipped.
+
+    Returns {"decisions": [...active, best first...], "overturned": n}, where
+    `overturned` counts matches left out because they no longer hold.
+    """
+    changed = sorted({p.strip().lstrip("/") for p in paths if p and p.strip()})
+    dirs = sorted({p.rsplit("/", 1)[0] for p in changed if "/" in p})
+    if not changed:
+        return {"decisions": [], "overturned": 0}
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            select f.source, f.path, e.body, e.occurred_at
+            from decision_files f
+            join decision_events e on e.scope = f.scope and e.source = f.source
+            where f.scope = %(scope)s and f.source <> %(exclude)s
+              and not (e.kind = 'pr' and e.occurred_at is null)
+              and (f.path = any(%(changed)s)
+                   or (position('/' in f.path) > 0
+                       and regexp_replace(f.path, '/[^/]*$', '') = any(%(dirs)s)))
+            """,
+            {"scope": scope, "exclude": exclude, "changed": changed, "dirs": dirs},
+        ).fetchall()
+        events = _events(conn, scope, sorted({r[0] for r in rows}))
+
+    matches: dict[str, dict] = {}
+    changed_set = set(changed)
+    for source, path, body, occurred_at in rows:
+        m = matches.setdefault(source, {"exact": set(), "nearby": set(), "body": body,
+                                        "at": occurred_at.isoformat() if occurred_at else ""})
+        (m["exact"] if path in changed_set else m["nearby"]).add(path)
+
+    found = statuses(scope, list(matches))
+    active = [s for s in matches if found[s].state == "active"]
+    active.sort(key=lambda s: (len(matches[s]["exact"]), len(matches[s]["nearby"]),
+                               matches[s]["at"], s), reverse=True)
+    return {
+        "decisions": [
+            {"source": s, **_public(events.get(s)),
+             "match": "file" if matches[s]["exact"] else "directory",
+             "paths": sorted(matches[s]["exact"] or matches[s]["nearby"]),
+             "summary": _summary(matches[s]["body"])}
+            for s in active[:limit]
+        ],
+        "overturned": len(matches) - len(active),
+    }
+
+
 # ---------------------------------------------------------------------------
 # internals
 # ---------------------------------------------------------------------------
@@ -348,6 +406,17 @@ def _public(event: Optional[dict]) -> dict:
     event = event or {}
     return {"title": event.get("title", ""), "repo": event.get("repo", ""),
             "url": event.get("url", ""), "occurred_at": event.get("occurred_at")}
+
+
+def _summary(body: str, limit: int = 220) -> str:
+    """The first paragraph of the reasoning, without the `PR #N: title`
+    header inscribe_pr puts in front of it or the review discussion after."""
+    declared, _ = split_stored_body(body or "")
+    paragraphs = [p.strip() for p in declared.split("\n\n") if p.strip()]
+    if paragraphs and paragraphs[0].startswith("PR #"):
+        paragraphs = paragraphs[1:]
+    text = " ".join((paragraphs[0] if paragraphs else "").split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
 def _like_escape(text: str) -> str:
