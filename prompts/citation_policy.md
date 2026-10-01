@@ -3,8 +3,9 @@
 Every factual claim you make must trace to a retrieved decision.
 
 - Cite inline, in square brackets, using the source label exactly as it
-  appears in the retrieved decision: `[PR #482]`, `[ADR-007]`,
-  `[commit a1b2c3d]`.
+  appears in the retrieved decision: `[acme/api#482]`, `[ADR-007]`,
+  `[commit a1b2c3d]`. Keep the repository in a PR label: one account's
+  repositories each have their own #482.
 - Cite at the point of the claim, not in a list at the end.
 - One decision can support several claims; repeat the citation each time.
 - If two decisions conflict, say so and cite both — a contradiction in the

@@ -157,10 +157,24 @@ later PR reverted; both read as equally authoritative forever.
   it as current. Decisions they name are added to the collector, so the
   guardrail accepts a citation of the PR that replaced one.
 
-Known limit: a decision's id is `PR #N`, unique per account scope, so two
-repositories in one account with the same PR number collide. That predates
-the graph; the extractor at least drops references qualified with a
-different repository.
+### Decision ids
+
+A PR decision is `owner/name#482`, GitHub's own notation, lowercased. It
+used to be `PR #482`, unique per account scope -- and one account's Canon
+spans many repositories, so the second #482 overwrote the first.
+
+- A bare `#12` in a PR means PR 12 of *that PR's* repository; `other/repo#12`
+  and full URLs keep theirs, so links across repositories resolve.
+- People and models still say "PR #482". `graph.resolve_source` maps that to
+  the one repository that has a #482, or reports the candidates when more
+  than one does (a 409 from the API; a question back from the agent tool).
+  The guardrail likewise accepts a "[PR #482]" citation only when exactly
+  one retrieved source is a #482.
+- Migration 0004 renames existing rows in Postgres. The vector store cannot
+  be renamed from SQL, so each rename is recorded in `source_renames` and
+  applied to the store by `semantic.apply_source_renames()` when the API or
+  worker starts -- moving the stored vector rather than re-embedding, and
+  retrying anything that fails on the next start.
 
 ### Write-through, then compact
 

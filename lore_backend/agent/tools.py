@@ -23,6 +23,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from lore_backend.config import settings
+from lore_backend.ingestion.links import pr_source
 from lore_backend.memory import episodic, graph, semantic
 
 logger = logging.getLogger("lore.agent.tools")
@@ -76,7 +77,8 @@ class SearchCommitsArgs(BaseModel):
 
 
 class DecisionStatusArgs(BaseModel):
-    source: str = Field(description="The decision to check, e.g. 'PR #482' or 'commit 1a2b3c4'.")
+    source: str = Field(description="The decision to check, by the label it was retrieved "
+                                    "under, e.g. 'acme/api#482' or 'commit 1a2b3c4'.")
 
 
 class DecisionsForPathArgs(BaseModel):
@@ -173,7 +175,7 @@ def build_tools(scope: str, login: str, collector: Collector,
 
         from lore_backend.retrieval.summarize import strip_bot_noise
 
-        source = f"PR #{number}"
+        source = pr_source(number, repo)
         body = strip_bot_noise(pr.get("body") or "")
         parts = [f"{pr.get('title', '')}", body]
         if files:
@@ -220,6 +222,13 @@ def build_tools(scope: str, login: str, collector: Collector,
         from lore_backend.ingestion.links import normalize_source
 
         normalized = normalize_source(source)
+        try:
+            normalized = graph.resolve_source(scope, normalized) if normalized else None
+        except graph.AmbiguousSource as exc:
+            collector.note_call("decision_status", {"source": source}, 0)
+            return (f"{source} exists in more than one repository: "
+                    f"{', '.join(exc.candidates)}. Call again with the one the "
+                    "question is about, or say which you mean.")
         found = graph.decision(scope, normalized, max_depth=3) if normalized else None
         collector.note_call("decision_status", {"source": source}, 1 if found else 0)
         if not found:

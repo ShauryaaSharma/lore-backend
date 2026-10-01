@@ -26,6 +26,7 @@ from lore_backend.api.health import router as health_router
 from lore_backend.api.v1.router import router as v1_router
 from lore_backend.api.webhook import router as webhook_router
 from lore_backend.logging_setup import configure_logging, new_request_id, request_id_var
+from lore_backend.memory import semantic
 from lore_backend.metrics import incr, observe
 from lore_backend.obs import tracing
 from lore_backend.storage.db import run_migrations
@@ -39,10 +40,21 @@ async def lifespan(app: FastAPI):
     applied = run_migrations()
     if applied:
         logger.info("applied migrations: %s", applied)
+    _apply_source_renames()
     yield
     # Traces are buffered and flushed here rather than per request — a /why
     # should never wait on the observability backend.
     tracing.flush()
+
+
+def _apply_source_renames() -> None:
+    """Finish migration 0004 in the vector store. Never blocks startup: a
+    pending rename only means an old label in search results until the
+    next start retries it."""
+    try:
+        semantic.apply_source_renames()
+    except Exception:
+        logger.exception("could not apply source renames to the vector store")
 
 
 app = FastAPI(title="Lore", version=__version__, lifespan=lifespan)
