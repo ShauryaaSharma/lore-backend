@@ -23,7 +23,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from lore_backend.config import settings
-from lore_backend.memory import episodic, semantic
+from lore_backend.memory import episodic, graph, semantic
 
 logger = logging.getLogger("lore.agent.tools")
 
@@ -73,6 +73,15 @@ class FetchPrArgs(BaseModel):
 class SearchCommitsArgs(BaseModel):
     query: str = Field(description="Text to find in commit messages.")
     repo: str = Field(default="", description="Optional owner/name to scope the search.")
+
+
+class DecisionStatusArgs(BaseModel):
+    source: str = Field(description="The decision to check, e.g. 'PR #482' or 'commit 1a2b3c4'.")
+
+
+class DecisionsForPathArgs(BaseModel):
+    path: str = Field(description="A file path, or a directory ending in '/', e.g. 'src/auth/'.")
+    limit: int = Field(default=8, ge=1, le=20)
 
 
 class PostCommentArgs(BaseModel):
@@ -206,6 +215,52 @@ def build_tools(scope: str, login: str, collector: Collector,
             lines.append(_format_decision(source, c["message"], meta))
         return "\n\n".join(lines)
 
+    def decision_status(source: str) -> str:
+        """Whether a decision still holds, and what overturned it if not."""
+        from lore_backend.ingestion.links import normalize_source
+
+        normalized = normalize_source(source)
+        found = graph.decision(scope, normalized, max_depth=3) if normalized else None
+        collector.note_call("decision_status", {"source": source}, 1 if found else 0)
+        if not found:
+            return (f"The decision graph has no record of {source}. That says nothing "
+                    "about whether it still holds; do not claim either way.")
+
+        lines = [f"[{found['source']}] {found['title']}".strip(), f"status: {found['status']}"]
+        if found["overturned_by"]:
+            by = next((d for d in found["lineage"] if d["source"] == found["overturned_by"]), {})
+            lines.append(f"overturned by {found['overturned_by']}"
+                         + (f" ({by.get('title')})" if by.get("title") else "")
+                         + (f": {found['overturned_evidence']}" if found["overturned_evidence"] else ""))
+        for d in found["lineage"]:
+            # Every decision named here may be cited, so the guardrail must
+            # know it was retrieved.
+            collector.add_hit(source=d["source"], text=d.get("title") or d["source"],
+                              metadata={"date": (d.get("occurred_at") or "")[:10],
+                                        "repo": d.get("repo", ""), "graph": True})
+            lines.append(f"  lineage: {d['source']} ({d['status']}) {d.get('title', '')}".rstrip())
+        if found["ingested"]:
+            collector.add_hit(source=found["source"], text=found.get("title") or found["source"],
+                              metadata={"repo": found.get("repo", ""), "graph": True})
+        return "\n".join(lines)
+
+    def decisions_for_path(path: str, limit: int = 8) -> str:
+        """Decisions that changed a file or directory, newest first."""
+        found = graph.decisions_touching(scope, path, limit=limit)
+        collector.note_call("decisions_for_path", {"path": path, "limit": limit}, len(found))
+        if not found:
+            return _NOTHING
+
+        lines = []
+        for d in found:
+            meta = {"date": (d.get("occurred_at") or "")[:10], "repo": d.get("repo", ""),
+                    "url": d.get("url", ""), "graph": True}
+            collector.add_hit(source=d["source"], text=d.get("title") or d["source"], metadata=meta)
+            status = d["status"] + (f" by {d['overturned_by']}" if d["overturned_by"] else "")
+            lines.append(f"[{d['source']}] ({status}) {d.get('title', '')}\n"
+                         f"  touched: {', '.join(d['paths'][:6])}")
+        return "\n\n".join(lines)
+
     def post_comment(repo: str, number: int, body: str) -> str:
         """Post a comment on a GitHub issue or PR. Only when explicitly
         asked."""
@@ -237,6 +292,16 @@ def build_tools(scope: str, login: str, collector: Collector,
             description="Read a specific pull request from GitHub when the Canon has no "
                         "decision for it.",
             args_schema=FetchPrArgs),
+        StructuredTool.from_function(
+            func=decision_status, name="decision_status",
+            description="Check whether a decision is still in force, or was superseded or "
+                        "reverted by a later one. Use before presenting a decision as current.",
+            args_schema=DecisionStatusArgs),
+        StructuredTool.from_function(
+            func=decisions_for_path, name="decisions_for_path",
+            description="List the decisions that changed a file or directory, and whether "
+                        "each still holds. Use when the question names code rather than a topic.",
+            args_schema=DecisionsForPathArgs),
         StructuredTool.from_function(
             func=search_commits, name="search_commits",
             description="Search commit messages on GitHub for a recorded reason.",

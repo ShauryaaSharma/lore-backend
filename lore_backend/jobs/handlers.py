@@ -56,12 +56,13 @@ def handle_backfill_installation(job: dict) -> None:
 
         for pr in gh.list_recent_prs(token, owner, name, since):
             threads = gh.fetch_pr_threads(token, owner, name, pr["number"])
+            files = gh.fetch_pr_files(token, owner, name, pr["number"], max_files=100)
             canon.inscribe_pr(
                 scope, number=pr["number"], title=pr.get("title") or "",
                 body=(pr.get("body") or ""), threads=threads,
                 author=(pr.get("user") or {}).get("login", ""),
                 repo_full=full, url=pr.get("html_url", ""),
-                merged_at=pr.get("merged_at") or "",
+                merged_at=pr.get("merged_at") or "", files=files,
             )
             captured += 1
             progress["prs_captured"] = captured
