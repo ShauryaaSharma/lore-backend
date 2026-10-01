@@ -7,3 +7,5 @@ qdrant_data/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+dist/
+build/
