@@ -98,9 +98,11 @@ Memory is three tiers, because they answer different questions:
 
 On top of them sits the **decision graph**: which decisions superseded or
 reverted which, and what code each one changed. It is what lets Lore say a
-decision is history rather than present it as current. Edges are read from
-PR text by fixed rules ("Supersedes #12", GitHub's "Reverts acme/api#12"),
-never by a model, and each keeps the sentence it came from as evidence.
+decision is history rather than present it as current. Decisions are
+identified as `owner/name#482`, so two repositories' #482s stay separate.
+Edges are read from PR text by fixed rules ("Supersedes #12", GitHub's
+"Reverts acme/api#12"), never by a model, and each keeps the sentence it
+came from as evidence.
 Only a revert undoes: if B replaced A and C replaced B, A stays replaced,
 but reverting a revert restores the original. Status is walked with a
 recursive query on read rather than stored.
@@ -122,7 +124,7 @@ Details in [ARCHITECTURE.md](ARCHITECTURE.md).
 | `GET /v1/why/history` | Recently answered questions for this Canon |
 | `GET /v1/canon`, `GET /v1/memories` | Cursor-paginated dump of the Canon |
 | `POST /v1/lore` | Free-text search, no composed answer |
-| `GET /v1/graph/decision?source=PR #482` | Is it still in force? What overturned it, its lineage, links, files |
+| `GET /v1/graph/decision?source=acme/api#482` | Is it still in force? What overturned it, its lineage, links, files |
 | `GET /v1/graph/files?path=src/auth/` | Decisions that changed a file or directory, newest first, with status |
 | `POST /v1/graph/check` | The PR decision check, for a list of files: from the CLI or a pre-push hook |
 | `POST /v1/graph/rebuild` | Re-derive links for decisions ingested before the graph existed |

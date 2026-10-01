@@ -27,8 +27,18 @@ def get_decision(
     if normalized is None:
         raise HTTPException(
             status_code=422,
-            detail="source must be a PR (`PR #482`, `#482`, `482`) or a commit (`commit 1a2b3c4`)",
+            detail="source must be a PR (`acme/api#482`, `PR #482`, `#482`, `482`) "
+                   "or a commit (`commit 1a2b3c4`)",
         )
+    try:
+        normalized = graph.resolve_source(scope, normalized)
+    except graph.AmbiguousSource as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": f"{exc.source} exists in more than one repository; "
+                               "ask again with one of these",
+                    "candidates": exc.candidates},
+        ) from exc
     found = graph.decision(scope, normalized, max_depth=depth)
     if found is None:
         raise HTTPException(status_code=404, detail=f"no decision or link recorded for {normalized}")
