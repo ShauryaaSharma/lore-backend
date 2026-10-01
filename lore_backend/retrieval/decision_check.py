@@ -56,6 +56,10 @@ def render(result: dict) -> str:
                  f"{where} {paths}"]
         if d.get("declared"):
             parts.append(f"**this PR says it {d['declared']} it**")
+        elif d.get("freshness") == "possibly_outdated":
+            # A reviewer should weigh this one as history in waiting, and
+            # the author of this PR may be the one to say so.
+            parts.append(f"⚠️ {d['freshness_note']}")
         lines.append("- " + " · ".join(parts))
         if d.get("summary"):
             lines.append(f"  > {d['summary']}")
