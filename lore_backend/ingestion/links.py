@@ -11,7 +11,10 @@ Three kinds of edge:
   supersedes  "Supersedes #12", "Replaces #12", "Obsoletes #12"
   reverts     "Reverts acme/api#12" (GitHub's own revert PR body),
               "This reverts commit 1a2b3c4"
-  references  any other mention of a PR in the same repository
+  references  any other mention of a PR
+
+Targets are labelled `owner/name#N`. A bare `#12` is PR 12 of the referring
+decision's own repository; `other/repo#12` and full URLs keep theirs.
 
 Overturning edges are read from the title and body only, never from the
 review discussion: "does this supersede #12?" in a comment is a question,
@@ -54,7 +57,9 @@ _CLOSING_RE = re.compile(
     rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]+(?P<run>{_REF_RUN})", re.IGNORECASE
 )
 _SOURCE_RE = re.compile(r"^(?:pr\s*)?#?\s*(\d+)$", re.IGNORECASE)
+_QUALIFIED_SOURCE_RE = re.compile(r"^(?P<repo>[\w.-]+/[\w.-]+)\s*#\s*(?P<num>\d+)$")
 _COMMIT_SOURCE_RE = re.compile(r"^(?:commit\s+)?([0-9a-f]{7,40})$", re.IGNORECASE)
+_PR_LABEL_RE = re.compile(r"^(?:PR #|[\w.-]+/[\w.-]+#)(?P<num>\d+)$")
 
 
 @dataclass(frozen=True)
@@ -64,9 +69,23 @@ class Link:
     evidence: str
 
 
-def pr_source(number: int | str) -> str:
-    """The source label a merged PR is stored under (see canon.inscribe_pr)."""
-    return f"PR #{int(number)}"
+def pr_source(number: int | str, repo: str = "") -> str:
+    """The source label a PR is stored under: `owner/name#482`, GitHub's own
+    notation. A bare `PR #482` is only unique within one repository, and one
+    account's Canon spans many, so the repository is part of the id whenever
+    it is known. `PR #482` remains for the rare PR stored without a repo."""
+    repo = (repo or "").strip().lower()
+    return f"{repo}#{int(number)}" if repo else f"PR #{int(number)}"
+
+
+def pr_number(source: str) -> int | None:
+    """The PR number in a source label of either form, else None."""
+    m = _PR_LABEL_RE.match(source or "")
+    return int(m.group("num")) if m else None
+
+
+def is_pr_source(source: str) -> bool:
+    return pr_number(source) is not None
 
 
 def commit_source(sha: str) -> str:
@@ -75,10 +94,15 @@ def commit_source(sha: str) -> str:
 
 
 def normalize_source(raw: str) -> str | None:
-    """Accept the ways people write a decision id: `482`, `#482`, `PR #482`,
-    `pr#482`, `commit 1a2b3c4`, a bare sha. Returns the stored label, or None
-    when it is none of those."""
+    """Accept the ways people write a decision id: `acme/api#482`, `482`,
+    `#482`, `PR #482`, `pr#482`, `commit 1a2b3c4`, a bare sha. Returns the
+    stored label, or None when it is none of those.
+
+    Unqualified PR numbers come back as `PR #482`; which repository that
+    means is a question for the store (see graph.resolve_source)."""
     text = (raw or "").strip()
+    if m := _QUALIFIED_SOURCE_RE.match(text):
+        return pr_source(m.group("num"), m.group("repo"))
     if m := _SOURCE_RE.match(text):
         return pr_source(m.group(1))
     if m := _COMMIT_SOURCE_RE.match(text):
@@ -90,9 +114,9 @@ def extract_links(*, title: str = "", body: str = "", discussion: str = "",
                   repo: str = "", self_source: str = "") -> list[Link]:
     """Every link this decision's text declares, strongest kind per target.
 
-    `repo` is the decision's own owner/name. References qualified with a
-    different repository are dropped: a decision source is only unique
-    within one repository's PR numbering.
+    `repo` is the decision's own owner/name: a bare `#12` means PR 12 *of
+    that repository*. A reference qualified with another repository keeps
+    that repository, so cross-repo links in one account resolve too.
     """
     declared = f"{title}\n{body}"
     found: dict[str, Link] = {}
@@ -107,22 +131,21 @@ def extract_links(*, title: str = "", body: str = "", discussion: str = "",
 
     for m in _VERB_RE.finditer(declared):
         kind = "reverts" if m.group("verb").lower().startswith("revert") else "supersedes"
-        for number in _numbers_in(m.group("run"), repo):
-            keep(pr_source(number), kind, _sentence(declared, m.start(), m.end()))
+        for target in _targets_in(m.group("run"), repo):
+            keep(target, kind, _sentence(declared, m.start(), m.end()))
 
     for m in _REVERT_COMMIT_RE.finditer(declared):
         keep(commit_source(m.group("sha")), "reverts", _sentence(declared, m.start(), m.end()))
 
     closing = {
-        n for m in _CLOSING_RE.finditer(f"{declared}\n{discussion}")
-        for n in _numbers_in(m.group("run"), repo)
+        target for m in _CLOSING_RE.finditer(f"{declared}\n{discussion}")
+        for target in _targets_in(m.group("run"), repo)
     }
     everything = f"{declared}\n{discussion}"
     for m in _REF_RE.finditer(everything):
-        number = _number_if_same_repo(m, repo)
-        if number is None or number in closing:
-            continue
-        keep(pr_source(number), "references", _sentence(everything, m.start(), m.end()))
+        target = _target(m, repo)
+        if target not in closing:
+            keep(target, "references", _sentence(everything, m.start(), m.end()))
 
     return sorted(found.values(), key=lambda link: (link.kind, link.to_source))
 
@@ -135,18 +158,17 @@ def split_stored_body(text: str) -> tuple[str, str]:
     return head, discussion if sep else ""
 
 
-def _numbers_in(run: str, repo: str) -> list[int]:
-    return [n for m in _REF_RE.finditer(run) if (n := _number_if_same_repo(m, repo)) is not None]
+def _targets_in(run: str, repo: str) -> list[str]:
+    return [_target(m, repo) for m in _REF_RE.finditer(run)]
 
 
-def _number_if_same_repo(m: re.Match, repo: str) -> int | None:
+def _target(m: re.Match, repo: str) -> str:
+    """The source label one reference points at. A bare `#12` belongs to
+    the referring decision's own repository."""
     if m.group("bare_num"):
-        return int(m.group("bare_num"))
-    qualified = m.group("url_repo") or m.group("qual_repo")
-    number = m.group("url_num") or m.group("qual_num")
-    if repo and qualified.lower() != repo.lower():
-        return None
-    return int(number)
+        return pr_source(m.group("bare_num"), repo)
+    return pr_source(m.group("url_num") or m.group("qual_num"),
+                     m.group("url_repo") or m.group("qual_repo"))
 
 
 def _sentence(text: str, start: int, end: int) -> str:

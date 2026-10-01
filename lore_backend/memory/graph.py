@@ -20,7 +20,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from lore_backend.ingestion.links import OVERTURNING, Link, extract_links, split_stored_body
+from lore_backend.ingestion.links import (
+    OVERTURNING,
+    Link,
+    extract_links,
+    pr_number,
+    split_stored_body,
+)
 from lore_backend.storage.db import get_conn
 
 logger = logging.getLogger("lore.memory.graph")
@@ -165,6 +171,43 @@ def component(scope: str, starts: list[str], max_depth: int = MAX_DEPTH) -> Comp
 
         comp.nodes = _events(conn, scope, reached)
     return comp
+
+
+class AmbiguousSource(LookupError):
+    """An unqualified `PR #482` that more than one repository has."""
+
+    def __init__(self, source: str, candidates: list[str]):
+        super().__init__(f"{source} is ambiguous: {', '.join(candidates)}")
+        self.source = source
+        self.candidates = candidates
+
+
+def resolve_source(scope: str, source: str) -> str:
+    """Turn an unqualified `PR #482` into the one stored `owner/name#482`.
+
+    People and models say "PR #482" without a repository. When exactly one
+    repository in this Canon has a #482 -- as a decision or as the end of
+    an edge -- that is the one meant. Several raise AmbiguousSource so the
+    caller can ask; none returns the label unchanged, for a plain 404.
+    Qualified labels and commits pass through untouched."""
+    number = pr_number(source)
+    if number is None or not source.startswith("PR #"):
+        return source
+
+    pattern = rf"^(PR #|[^#\s]+#){number}$"
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            select source from decision_events where scope = %(scope)s and source ~ %(p)s
+            union select from_source from decision_links where scope = %(scope)s and from_source ~ %(p)s
+            union select to_source from decision_links where scope = %(scope)s and to_source ~ %(p)s
+            """,
+            {"scope": scope, "p": pattern},
+        ).fetchall()
+    candidates = sorted(r[0] for r in rows)
+    if len(candidates) > 1:
+        raise AmbiguousSource(source, candidates)
+    return candidates[0] if candidates else source
 
 
 def statuses(scope: str, sources: list[str]) -> dict[str, Status]:

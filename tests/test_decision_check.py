@@ -17,10 +17,10 @@ REPO = "acme/api"
 def decision(number: int, files: list[str], body: str = "", *,
              merged: str | None = "2026-01-01T00:00:00Z", title: str | None = None,
              scope: str = SCOPE) -> None:
-    source = f"PR #{number}"
+    source = f"acme/api#{number}"
     title = title or f"Decision {number}"
     episodic.record_event(scope, kind="pr", source=source, title=title,
-                          body=f"{source}: {title}" + (f"\n\n{body}" if body else ""),
+                          body=f"PR #{number}: {title}" + (f"\n\n{body}" if body else ""),
                           repo=REPO, occurred_at=merged)
     graph.index_decision(scope, source, title=title, body=body, repo=REPO,
                          files=[{"filename": f, "status": "modified"} for f in files])
@@ -38,27 +38,27 @@ def test_same_file_ranks_above_same_directory():
 
     result = decision_check.check(SCOPE, ["src/auth/jwt.py"])
 
-    assert sources(result) == ["PR #2", "PR #1"]
+    assert sources(result) == ["acme/api#2", "acme/api#1"]
     assert [d["match"] for d in result["decisions"]] == ["file", "directory"]
 
 
 def test_more_overlapping_files_rank_higher():
     decision(1, ["src/a.py"], merged="2026-03-01T00:00:00Z")
     decision(2, ["src/a.py", "src/b.py"], merged="2026-01-01T00:00:00Z")
-    assert sources(decision_check.check(SCOPE, ["src/a.py", "src/b.py"])) == ["PR #2", "PR #1"]
+    assert sources(decision_check.check(SCOPE, ["src/a.py", "src/b.py"])) == ["acme/api#2", "acme/api#1"]
 
 
 def test_recency_breaks_ties():
     decision(1, ["src/a.py"], merged="2026-01-01T00:00:00Z")
     decision(2, ["src/a.py"], merged="2026-02-01T00:00:00Z")
-    assert sources(decision_check.check(SCOPE, ["src/a.py"])) == ["PR #2", "PR #1"]
+    assert sources(decision_check.check(SCOPE, ["src/a.py"])) == ["acme/api#2", "acme/api#1"]
 
 
 def test_root_level_files_only_match_exactly():
     """Editing README.md is not related to every other root file's decision."""
     decision(1, ["setup.cfg"])
     decision(2, ["README.md"])
-    assert sources(decision_check.check(SCOPE, ["README.md"])) == ["PR #2"]
+    assert sources(decision_check.check(SCOPE, ["README.md"])) == ["acme/api#2"]
 
 
 def test_unrelated_directories_do_not_match():
@@ -72,7 +72,7 @@ def test_overturned_decisions_are_left_out_but_counted():
 
     result = decision_check.check(SCOPE, ["src/auth/session.py"])
 
-    assert sources(result) == ["PR #2"]
+    assert sources(result) == ["acme/api#2"]
     assert result["overturned"] == 1
 
 
@@ -83,14 +83,14 @@ def test_unmerged_prs_are_not_decisions():
 
 def test_the_change_is_never_reported_against_itself():
     decision(7, ["src/a.py"])
-    assert decision_check.check(SCOPE, ["src/a.py"], number=7)["decisions"] == []
+    assert decision_check.check(SCOPE, ["src/a.py"], repo=REPO, number=7)["decisions"] == []
 
 
 def test_limit():
     for n in range(1, 8):
         decision(n, ["src/a.py"], merged=f"2026-01-0{n}T00:00:00Z")
     assert sources(decision_check.check(SCOPE, ["src/a.py"], limit=3)) == [
-        "PR #7", "PR #6", "PR #5"]
+        "acme/api#7", "acme/api#6", "acme/api#5"]
 
 
 def test_scopes_are_isolated():
@@ -119,7 +119,7 @@ def test_marks_decisions_the_change_says_it_overturns():
     result = decision_check.check(SCOPE, ["src/a.py"], body="Supersedes #1. Context in #2.",
                                   repo=REPO, number=9)
     assert {d["source"]: d["declared"] for d in result["decisions"]} == {
-        "PR #1": "supersedes", "PR #2": None}
+        "acme/api#1": "supersedes", "acme/api#2": None}
 
 
 # --------------------------------------------------------------- rendering
@@ -136,7 +136,7 @@ def test_render():
     text = decision_check.render(result)
 
     assert text.splitlines()[2:4] == [
-        "- **PR #1** — Move to JWT _(merged 2026-01-01)_ · same file `src/auth/session.py`"
+        "- **acme/api#1** — Move to JWT _(merged 2026-01-01)_ · same file `src/auth/session.py`"
         " · **this PR says it reverts it**",
         "  > Session failover logged everyone out.",
     ]
@@ -181,10 +181,10 @@ def test_webhook_appends_the_decisions_to_the_summary_comment(github):
 
     result = webhook_handler.handle_pull_request_event(opened())
 
-    assert result["decisions"] == ["PR #1"]
+    assert result["decisions"] == ["acme/api#1"]
     [comment] = github["posted"]
     assert comment.startswith("## Lore\n\nsummary\n\n**Decisions behind the code")
-    assert "**PR #1** — Move to JWT" in comment
+    assert "**acme/api#1** — Move to JWT" in comment
 
 
 def test_webhook_posts_only_the_summary_when_nothing_matches(github):
