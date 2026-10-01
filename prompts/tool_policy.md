@@ -22,7 +22,9 @@ question:**
   `decisions_for_path`.
 - You are about to rest the answer on a decision that is not recent → check
   it with `decision_status` first. A superseded or reverted decision is
-  history, not the current answer: say what replaced it.
+  history, not the current answer: say what replaced it. A decision marked
+  *possibly outdated* was never replaced on record, but its code has changed
+  a lot since: give it, say it may no longer hold, and name the later PRs.
 - Nothing plausibly matches and you have no specific handle to chase → stop
   and say the Canon has no record. Do not keep searching with reworded
   queries; if two different phrasings return nothing useful, a third will

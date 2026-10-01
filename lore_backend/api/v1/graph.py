@@ -57,12 +57,25 @@ def get_decisions_for_path(
     return {"path": path, "count": len(decisions), "decisions": decisions}
 
 
+@router.get("/stale")
+def get_stale_decisions(
+    limit: int = Query(20, ge=1, le=100),
+    scope: str = Depends(require_scope),
+):
+    """Decisions still in force whose code has probably moved on: files
+    deleted since, or most of them changed by PRs that never said they
+    replaced it. A review queue, not a verdict -- each entry lists the PRs
+    and files behind the flag."""
+    decisions = graph.stale_decisions(scope, limit=limit)
+    return {"count": len(decisions), "decisions": decisions}
+
+
 class CheckRequest(BaseModel):
     files: list[str] = Field(..., min_length=1, max_length=500,
                              description="Paths the change touches, repository-relative")
     title: str = ""
     body: str = Field("", description="Change description; 'Supersedes #N' here is recognised")
-    repo: str = Field("", description="owner/name, so references to other repos are ignored")
+    repo: str = Field("", description="owner/name, so a bare #N in the body means this repository")
     limit: int = Field(5, ge=1, le=20)
 
 

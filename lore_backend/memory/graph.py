@@ -27,6 +27,7 @@ from lore_backend.ingestion.links import (
     pr_number,
     split_stored_body,
 )
+from lore_backend.memory import freshness as freshness_mod
 from lore_backend.storage.db import get_conn
 
 logger = logging.getLogger("lore.memory.graph")
@@ -248,6 +249,8 @@ def decision(scope: str, source: str, max_depth: int = 5) -> Optional[dict]:
         return None
 
     status = _status(source, comp)
+    fresh = (freshness_mod.freshness(scope, [source])[source]
+             if node is not None and status.state == "active" else None)
     lineage = sorted(
         (s for s in comp.sources if s != source and comp.depth[s] <= max_depth),
         key=lambda s: (comp.depth[s], s),
@@ -259,6 +262,10 @@ def decision(scope: str, source: str, max_depth: int = 5) -> Optional[dict]:
         "status": status.state,
         "overturned_by": status.overturned_by,
         "overturned_evidence": status.evidence,
+        # An inference from later changes, kept apart from `status`, which
+        # only ever reflects what someone declared. None when not in force.
+        "freshness": fresh.as_dict() if fresh else None,
+        "freshness_note": freshness_mod.describe(fresh) if fresh else "",
         "lineage": [
             {"source": s, "depth": comp.depth[s], "ingested": s in comp.nodes,
              "status": _status(s, comp).state, **_public(comp.nodes.get(s))}
@@ -299,9 +306,12 @@ def decisions_touching(scope: str, path: str, limit: int = 20) -> list[dict]:
         events = _events(conn, scope, [r[0] for r in rows])
 
     found = statuses(scope, [r[0] for r in rows])
+    fresh = freshness_mod.freshness(scope, [s for s, st in found.items() if st.state == "active"])
     return [
         {"source": r[0], **_public(events.get(r[0])), "paths": list(r[1]),
-         "status": found[r[0]].state, "overturned_by": found[r[0]].overturned_by}
+         "status": found[r[0]].state, "overturned_by": found[r[0]].overturned_by,
+         "freshness": fresh[r[0]].state if r[0] in fresh else None,
+         "freshness_note": freshness_mod.describe(fresh[r[0]]) if r[0] in fresh else ""}
         for r in rows
     ]
 
@@ -352,16 +362,42 @@ def decisions_for_files(scope: str, paths: list[str], *, limit: int = 5,
     active = [s for s in matches if found[s].state == "active"]
     active.sort(key=lambda s: (len(matches[s]["exact"]), len(matches[s]["nearby"]),
                                matches[s]["at"], s), reverse=True)
+    shown = active[:limit]
+    fresh = freshness_mod.freshness(scope, shown)
     return {
         "decisions": [
             {"source": s, **_public(events.get(s)),
              "match": "file" if matches[s]["exact"] else "directory",
              "paths": sorted(matches[s]["exact"] or matches[s]["nearby"]),
-             "summary": _summary(matches[s]["body"])}
-            for s in active[:limit]
+             "summary": _summary(matches[s]["body"]),
+             "freshness": fresh[s].state,
+             "freshness_note": freshness_mod.describe(fresh[s])}
+            for s in shown
         ],
         "overturned": len(matches) - len(active),
     }
+
+
+def stale_decisions(scope: str, limit: int = 20) -> list[dict]:
+    """Decisions still in force that the code has probably moved on from --
+    the list to walk through when deciding what to mark as history. Deleted
+    files first, then the largest share of files changed since."""
+    found = {s: f for s, f in freshness_mod.freshness(scope).items()
+             if f.state == "possibly_outdated"}
+    if not found:
+        return []
+    held = statuses(scope, list(found))
+    candidates = [f for s, f in found.items() if held[s].state == "active"]
+    candidates.sort(key=lambda f: ("removed" in f.signals,
+                                   f.files_changed / max(f.files_total, 1),
+                                   f.changed_by[0].occurred_at or "" if f.changed_by else "",
+                                   f.source), reverse=True)
+    candidates = candidates[:limit]
+    with get_conn() as conn:
+        events = _events(conn, scope, [f.source for f in candidates])
+    return [{"source": f.source, **_public(events.get(f.source)),
+             "freshness": f.as_dict(), "freshness_note": freshness_mod.describe(f)}
+            for f in candidates]
 
 
 # ---------------------------------------------------------------------------

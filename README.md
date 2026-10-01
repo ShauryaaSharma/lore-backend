@@ -126,6 +126,7 @@ Details in [ARCHITECTURE.md](ARCHITECTURE.md).
 | `POST /v1/lore` | Free-text search, no composed answer |
 | `GET /v1/graph/decision?source=acme/api#482` | Is it still in force? What overturned it, its lineage, links, files |
 | `GET /v1/graph/files?path=src/auth/` | Decisions that changed a file or directory, newest first, with status |
+| `GET /v1/graph/stale` | Decisions still in force that the code has probably moved on from |
 | `POST /v1/graph/check` | The PR decision check, for a list of files: from the CLI or a pre-push hook |
 | `POST /v1/graph/rebuild` | Re-derive links for decisions ingested before the graph existed |
 | `POST /v1/ingest/seed` | Load the seed corpus (LIVE mode) |
