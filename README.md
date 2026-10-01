@@ -105,6 +105,13 @@ Only a revert undoes: if B replaced A and C replaced B, A stays replaced,
 but reverting a revert restores the original. Status is walked with a
 recursive query on read rather than stored.
 
+The graph powers the **decision check**. When a PR opens, Lore's comment
+lists the decisions still in force behind the files it changes (same file
+first, then same directory) with the reasoning each was made for, and flags
+any the PR says it supersedes or reverts. `/why` only helps someone who
+already suspects there is a reason; this reaches the reviewer who does not.
+No model in that path. Turn it off with `PR_DECISION_CHECK_ENABLED=false`.
+
 Details in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## API
@@ -117,6 +124,7 @@ Details in [ARCHITECTURE.md](ARCHITECTURE.md).
 | `POST /v1/lore` | Free-text search, no composed answer |
 | `GET /v1/graph/decision?source=PR #482` | Is it still in force? What overturned it, its lineage, links, files |
 | `GET /v1/graph/files?path=src/auth/` | Decisions that changed a file or directory, newest first, with status |
+| `POST /v1/graph/check` | The PR decision check, for a list of files: from the CLI or a pre-push hook |
 | `POST /v1/graph/rebuild` | Re-derive links for decisions ingested before the graph existed |
 | `POST /v1/ingest/seed` | Load the seed corpus (LIVE mode) |
 | `POST /v1/inscribe` | CLI writes a commit's `Why:` (idempotent) |

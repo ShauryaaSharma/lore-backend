@@ -12,7 +12,7 @@ import hmac
 from lore_backend.config import settings
 from lore_backend.ingestion import github_client as gh
 from lore_backend.jobs import queue
-from lore_backend.retrieval import canon
+from lore_backend.retrieval import canon, decision_check
 from lore_backend.retrieval.summarize import pr_understanding_comment
 from lore_backend.storage.queries import get_or_create_tenant_for_account, upsert_installation
 
@@ -60,8 +60,18 @@ def handle_pull_request_event(payload: dict) -> dict:
             return {"ok": True, "commented": False, "reason": "no installation token"}
         threads = gh.fetch_pr_threads(token, owner, repo_name, number)
         comment = pr_understanding_comment(title, body, threads)
+        decisions = []
+        if settings.pr_decision_check_enabled:
+            files = gh.fetch_pr_files(token, owner, repo_name, number, max_files=100)
+            result = decision_check.check(
+                scope, [f["filename"] for f in files], title=title, body=body,
+                repo=repo_full, number=number, limit=settings.pr_decision_check_limit)
+            decisions = [d["source"] for d in result["decisions"]]
+            if section := decision_check.render(result):
+                comment += "\n\n" + section
         posted = gh.post_issue_comment(token, owner, repo_name, number, comment)
-        return {"ok": True, "commented": posted, "pr": number, "action": action}
+        return {"ok": True, "commented": posted, "pr": number, "action": action,
+                "decisions": decisions}
 
     if action != "closed" or not pr.get("merged", False):
         return {"ok": True, "captured": False,
