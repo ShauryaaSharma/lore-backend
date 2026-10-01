@@ -53,7 +53,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lorehasit"
+Homepage = "https://github.com/ShauryaaSharma/lore-backend"
 Repository = "https://github.com/ShauryaaSharma/lore-backend"
 Documentation = "https://github.com/ShauryaaSharma/lore-backend/blob/main/ARCHITECTURE.md"
 Issues = "https://github.com/ShauryaaSharma/lore-backend/issues"
