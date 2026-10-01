@@ -157,6 +157,33 @@ later PR reverted; both read as equally authoritative forever.
   it as current. Decisions they name are added to the collector, so the
   guardrail accepts a citation of the PR that replaced one.
 
+### Freshness: the one inference
+
+`status` only ever reflects what someone declared, so a decision nobody
+formally replaced reads as current forever -- even after three PRs rewrote
+the code it was about. `memory/freshness.py` adds a separate `freshness`:
+a decision still in force is *possibly outdated* when, after it merged, a
+later merged PR deleted one of its files, or later merged PRs changed at
+least half of its files across at least two PRs (`STALE_MIN_FILE_SHARE`,
+`STALE_MIN_LATER_CHANGES`).
+
+It never overrides `status`, and it errs towards silence:
+
+- Later PRs linked to the decision in either direction do not count. Their
+  authors knew about it and did not say it was replaced.
+- Unmerged PRs, earlier PRs, and decisions with no recorded files are not
+  evidence either way.
+- Every flag carries the PRs and files behind it.
+
+It surfaces in `GET /v1/graph/decision`, as a warning on the PR decision
+check (where the PR's author is often the right person to write
+"Supersedes #N"), in the agent's `decision_status` tool -- which tells the
+model to hedge, not to call the decision replaced -- and as a review queue
+at `GET /v1/graph/stale`.
+
+Known limit: a rename is recorded under the new path only, so a decision
+whose files were renamed away does not register as changed.
+
 ### Decision ids
 
 A PR decision is `owner/name#482`, GitHub's own notation, lowercased. It

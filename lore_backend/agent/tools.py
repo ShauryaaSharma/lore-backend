@@ -236,6 +236,10 @@ def build_tools(scope: str, login: str, collector: Collector,
                     "about whether it still holds; do not claim either way.")
 
         lines = [f"[{found['source']}] {found['title']}".strip(), f"status: {found['status']}"]
+        if found.get("freshness_note"):
+            # Inferred, not declared: the model should hedge, not overrule.
+            lines.append(f"{found['freshness_note']} -- an inference from later changes; "
+                         "present the decision as possibly no longer current, not as replaced")
         if found["overturned_by"]:
             by = next((d for d in found["lineage"] if d["source"] == found["overturned_by"]), {})
             lines.append(f"overturned by {found['overturned_by']}"
@@ -266,6 +270,8 @@ def build_tools(scope: str, login: str, collector: Collector,
                     "url": d.get("url", ""), "graph": True}
             collector.add_hit(source=d["source"], text=d.get("title") or d["source"], metadata=meta)
             status = d["status"] + (f" by {d['overturned_by']}" if d["overturned_by"] else "")
+            if d.get("freshness") == "possibly_outdated":
+                status += ", possibly outdated"
             lines.append(f"[{d['source']}] ({status}) {d.get('title', '')}\n"
                          f"  touched: {', '.join(d['paths'][:6])}")
         return "\n\n".join(lines)

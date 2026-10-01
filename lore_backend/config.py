@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     mention_trigger: str = "@lore"
     mention_allowed_associations: str = "OWNER,MEMBER,COLLABORATOR"
 
+    # --- Decision freshness (memory/freshness.py) ---
+    # An active decision is "possibly outdated" when later merged PRs that
+    # never mention it changed at least this share of its files, across at
+    # least this many PRs -- or deleted any of them.
+    stale_min_file_share: float = 0.5
+    stale_min_later_changes: int = 2
+
     # --- Single-tenant fallback ---
     lore_default_account: str = ""
 
