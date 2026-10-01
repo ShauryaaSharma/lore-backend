@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     github_webhook_secret: str = ""
     github_token: str = ""
     backfill_days: int = 15
+    # On an opened PR, list the decisions in force behind the files it
+    # changes (see retrieval/decision_check.py). Off leaves the comment as
+    # the summary alone.
+    pr_decision_check_enabled: bool = True
+    pr_decision_check_limit: int = 5
 
     # --- Single-tenant fallback ---
     lore_default_account: str = ""
