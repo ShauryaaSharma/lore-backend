@@ -9,6 +9,7 @@ import logging
 
 from lore_backend.config import settings
 from lore_backend.ingestion import github_client as gh
+from lore_backend.ingestion import mentions
 from lore_backend.jobs import queue
 from lore_backend.retrieval import canon
 from lore_backend.retrieval.summarize import welcome_body
@@ -121,5 +122,6 @@ def enqueue_due_consolidations() -> list[int]:
 
 HANDLERS = {
     "backfill_installation": handle_backfill_installation,
+    mentions.JOB_TYPE: mentions.handle_answer_mention,
     "consolidate_memory": handle_consolidate_memory,
 }

@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # the summary alone.
     pr_decision_check_enabled: bool = True
     pr_decision_check_limit: int = 5
+    # "@lore why ...?" in a PR or issue thread gets an answer in that thread.
+    # Only these author associations can trigger it: on a public repository
+    # anyone can comment, and each answer costs an LLM run.
+    mention_trigger: str = "@lore"
+    mention_allowed_associations: str = "OWNER,MEMBER,COLLABORATOR"
 
     # --- Single-tenant fallback ---
     lore_default_account: str = ""

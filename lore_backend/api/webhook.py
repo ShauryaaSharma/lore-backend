@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from lore_backend.ingestion.dedup import is_new_delivery
+from lore_backend.ingestion.mentions import handle_issue_comment_event
 from lore_backend.ingestion.webhook_handler import (
     handle_installation_event,
     handle_pull_request_event,
@@ -40,7 +41,8 @@ async def github_webhook(
 
     if x_github_event == "ping":
         return {"ok": True, "pong": True}
-    if x_github_event not in ("pull_request", "installation", "installation_repositories"):
+    if x_github_event not in ("pull_request", "issue_comment", "installation",
+                              "installation_repositories"):
         return {"ok": True, "ignored": x_github_event}
 
     try:
@@ -51,4 +53,6 @@ async def github_webhook(
     incr(f"webhook_events_total{{event={x_github_event}}}")
     if x_github_event in ("installation", "installation_repositories"):
         return handle_installation_event(payload)
+    if x_github_event == "issue_comment":
+        return handle_issue_comment_event(payload)
     return handle_pull_request_event(payload)

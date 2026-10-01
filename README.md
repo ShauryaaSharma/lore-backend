@@ -211,4 +211,22 @@ dependency (`lore_backend/examples/kafka_ingestion/requirements.txt`).
 
 Point the App's webhook URL at `<your-host>/webhook/github` and set
 `GITHUB_WEBHOOK_SECRET` / `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`. The
-payload shapes handled are in `lore_backend/ingestion/webhook_handler.py`.
+payload shapes handled are in `lore_backend/ingestion/webhook_handler.py`
+and `lore_backend/ingestion/mentions.py`.
+
+Subscribe the App to **Pull request**, **Installation** and **Issue
+comment** events, with read access to contents and pull requests and write
+access to issues (comments and reactions).
+
+### Asking in the thread
+
+Comment `@lore why is this a JWT and not a session?` on a PR or issue and
+Lore answers in that thread, with linked sources. The webhook reacts 👀 and
+queues the question; the worker answers it through the same agent and
+citation guardrail as `/why`, so the background worker must be running.
+
+Only comment authors whose association is in
+`MENTION_ALLOWED_ASSOCIATIONS` (default `OWNER,MEMBER,COLLABORATOR`) can
+trigger an answer: on a public repository anyone can comment, and each
+answer is an LLM run. Bot comments are never answered, so Lore cannot reply
+to itself. `MENTION_TRIGGER` changes `@lore` to match your App's name.
