@@ -296,6 +296,15 @@ def post_issue_comment(token: str, owner: str, repo: str, number: int,
     return resp.status_code in (200, 201)
 
 
+def add_reaction(token: str, owner: str, repo: str, comment_id: int, content: str) -> bool:
+    """React to an issue/PR comment, e.g. "eyes" to say it was seen."""
+    resp = _request(
+        "POST", f"{API}/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
+        headers=_headers(token), json={"content": content},
+    )
+    return resp.status_code in (200, 201)
+
+
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
