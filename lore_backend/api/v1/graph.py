@@ -4,10 +4,12 @@ and which decisions shaped a file."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from lore_backend.api.deps import require_scope
 from lore_backend.ingestion.links import normalize_source
 from lore_backend.memory import graph
+from lore_backend.retrieval import decision_check
 
 router = APIRouter(prefix="/graph")
 
@@ -43,6 +45,23 @@ def get_decisions_for_path(
     first, each marked with whether it still holds."""
     decisions = graph.decisions_touching(scope, path, limit=limit)
     return {"path": path, "count": len(decisions), "decisions": decisions}
+
+
+class CheckRequest(BaseModel):
+    files: list[str] = Field(..., min_length=1, max_length=500,
+                             description="Paths the change touches, repository-relative")
+    title: str = ""
+    body: str = Field("", description="Change description; 'Supersedes #N' here is recognised")
+    repo: str = Field("", description="owner/name, so references to other repos are ignored")
+    limit: int = Field(5, ge=1, le=20)
+
+
+@router.post("/check")
+def check_change(req: CheckRequest, scope: str = Depends(require_scope)):
+    """The decision check the GitHub App runs on every opened PR, callable
+    before there is a PR: from a pre-push hook, the CLI, or the editor."""
+    return decision_check.check(scope, req.files, title=req.title, body=req.body,
+                                repo=req.repo, limit=req.limit)
 
 
 @router.post("/rebuild")
