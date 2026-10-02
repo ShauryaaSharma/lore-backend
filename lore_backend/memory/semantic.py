@@ -165,6 +165,28 @@ class QdrantStore:
         )
         return [_hit_from_payload(p.payload or {}, 0.0) for p in points]
 
+    def rename(self, scope: str, old_doc_id: str, new_doc_id: str, new_source: str) -> bool:
+        """Move a point to its new id, keeping its vector. False when there
+        was nothing under the old id."""
+        from qdrant_client import models
+
+        old_pid, new_pid = point_id(scope, old_doc_id), point_id(scope, new_doc_id)
+        found = {str(p.id): p for p in self.client.retrieve(
+            collection_name=self.collection, ids=[old_pid, new_pid],
+            with_payload=True, with_vectors=True)}
+        if old_pid not in found:
+            return False
+        # Re-ingested since the upgrade: the new point is fresher, so the
+        # old one just goes.
+        if new_pid not in found:
+            point = found[old_pid]
+            payload = {**(point.payload or {}), "doc_id": new_doc_id, "source": new_source}
+            self.client.upsert(collection_name=self.collection, points=[
+                models.PointStruct(id=new_pid, vector=point.vector, payload=payload)])
+        self.client.delete(collection_name=self.collection,
+                           points_selector=models.PointIdsList(points=[old_pid]))
+        return True
+
 
 class PgVectorStore:
     """Same Canon, in the Postgres we already run. One connection string and
@@ -245,6 +267,29 @@ class PgVectorStore:
             ).fetchall()
         return [Hit(id=r[0], text=r[1], metadata=r[2] or {}) for r in rows]
 
+    def rename(self, scope: str, old_doc_id: str, new_doc_id: str, new_source: str) -> bool:
+        import json
+
+        from lore_backend.storage.db import get_conn
+
+        old_pid, new_pid = point_id(scope, old_doc_id), point_id(scope, new_doc_id)
+        with get_conn() as conn:
+            # Re-ingested since the upgrade: the new row is fresher, so the
+            # old one just goes.
+            if conn.execute(f"select 1 from {self.table} where id = %s", (new_pid,)).fetchone():
+                cur = conn.execute(f"delete from {self.table} where id = %s", (old_pid,))
+            else:
+                cur = conn.execute(
+                    f"""
+                    update {self.table}
+                    set id = %s, doc_id = %s, metadata = metadata || %s::jsonb, updated_at = now()
+                    where id = %s
+                    """,
+                    (new_pid, new_doc_id, json.dumps({"source": new_source}), old_pid),
+                )
+            conn.commit()
+            return cur.rowcount > 0
+
 
 def _hit_from_payload(payload: dict, score: float) -> Hit:
     payload = dict(payload)
@@ -289,6 +334,52 @@ def search(scope: str, query: str, limit: int = 20) -> list[Hit]:
         # A vector-store outage should degrade /why to "no record", not 500.
         logger.exception("semantic search failed (scope=%s)", scope)
         return []
+
+
+def apply_source_renames(batch: int = 200) -> dict:
+    """Carry decision renames recorded in Postgres (see migration 0004) over
+    to the vector store. Called at startup by the API and the worker.
+
+    Rows are claimed by stamping `applied_at` before the store is touched,
+    so two processes starting together do not move the same point twice; a
+    rename that fails is un-stamped and retried on the next start. Does not
+    open the store at all when nothing is pending -- mock mode never wrote
+    to it, and should not create one just to find it empty."""
+    from lore_backend.storage.db import get_conn
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            update source_renames set applied_at = now()
+            where (scope, old_source) in (
+                select scope, old_source from source_renames
+                where applied_at is null limit %s for update skip locked)
+            returning scope, old_source, new_source
+            """,
+            (batch,),
+        ).fetchall()
+        conn.commit()
+    if not rows:
+        return {"renamed": 0, "missing": 0, "failed": 0}
+
+    renamed = missing = failed = 0
+    store = get_store()
+    for scope, old, new in rows:
+        try:
+            if store.rename(scope, doc_id_for(old), doc_id_for(new), new):
+                renamed += 1
+            else:
+                missing += 1
+        except Exception:
+            logger.exception("vector store rename failed: %s -> %s (scope=%s)", old, new, scope)
+            failed += 1
+            with get_conn() as conn:
+                conn.execute("update source_renames set applied_at = null "
+                             "where scope = %s and old_source = %s", (scope, old))
+                conn.commit()
+    logger.info("applied source renames: %d moved, %d not in store, %d failed",
+                renamed, missing, failed)
+    return {"renamed": renamed, "missing": missing, "failed": failed}
 
 
 def all_memories(scope: str, limit: int = 1000) -> list[Hit]:

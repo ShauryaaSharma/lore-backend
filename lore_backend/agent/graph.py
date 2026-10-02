@@ -25,6 +25,7 @@ from lore_backend.agent.guardrail import failure_message
 from lore_backend.agent.state import GraphState
 from lore_backend.agent.tools import Collector, build_tools
 from lore_backend.config import settings
+from lore_backend.ingestion.links import is_pr_source
 from lore_backend.memory import procedural
 from lore_backend.metrics import incr
 from lore_backend.obs import tracing
@@ -159,7 +160,7 @@ def _sources_for(matched: list[str], retrieved: list[dict]) -> list[list[str]]:
     for source in matched:
         meta = (by_source.get(source) or {}).get("metadata", {})
         low = str(source).lower()
-        kind = ("PR" if low.startswith("pr") else
+        kind = ("PR" if is_pr_source(source) else
                 "commit" if low.startswith("commit") else
                 "ADR" if low.startswith("adr") else "memory")
         entry = [kind, source]

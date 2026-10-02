@@ -16,10 +16,10 @@ REPO = "acme/api"
 def pr(number: int, body: str = "", *, merged: str | None = "2026-01-01T00:00:00Z",
        title: str | None = None, files: list[str] | None = None, scope: str = SCOPE) -> str:
     """Store a PR the way ingestion does: an episodic event, then its edges."""
-    source = f"PR #{number}"
+    source = f"acme/api#{number}"
     title = title or f"Decision {number}"
     episodic.record_event(scope, kind="pr", source=source, title=title,
-                          body=f"{source}: {title}\n\n{body}", repo=REPO,
+                          body=f"PR #{number}: {title}\n\n{body}", repo=REPO,
                           occurred_at=merged)
     graph.index_decision(scope, source, title=title, body=body, repo=REPO,
                          files=None if files is None else [{"filename": f, "status": "modified"}
@@ -35,30 +35,30 @@ def status(source: str) -> graph.Status:
 
 def test_a_decision_nothing_overturned_is_active():
     pr(1)
-    assert status("PR #1").state == "active"
+    assert status("acme/api#1").state == "active"
 
 
 def test_superseded_names_what_replaced_it_and_why():
     pr(1)
     pr(2, "Supersedes #1 because session failover logged everyone out.")
-    found = status("PR #1")
-    assert (found.state, found.overturned_by) == ("superseded", "PR #2")
+    found = status("acme/api#1")
+    assert (found.state, found.overturned_by) == ("superseded", "acme/api#2")
     assert "failover" in found.evidence
 
 
 def test_reverted():
     pr(1)
     pr(2, "Reverts acme/api#1")
-    assert status("PR #1").state == "reverted"
+    assert status("acme/api#1").state == "reverted"
 
 
 def test_reverting_the_revert_restores_the_original():
     pr(1)
     pr(2, "Reverts acme/api#1", merged="2026-02-01T00:00:00Z")
     pr(3, "Reverts acme/api#2", merged="2026-03-01T00:00:00Z")
-    assert status("PR #1").state == "active"
-    assert status("PR #2").state == "reverted"
-    assert status("PR #3").state == "active"
+    assert status("acme/api#1").state == "active"
+    assert status("acme/api#2").state == "reverted"
+    assert status("acme/api#3").state == "active"
 
 
 def test_superseding_the_replacement_does_not_bring_the_original_back():
@@ -67,33 +67,33 @@ def test_superseding_the_replacement_does_not_bring_the_original_back():
     pr(1)
     pr(2, "Supersedes #1", merged="2026-02-01T00:00:00Z")
     pr(3, "Supersedes #2", merged="2026-03-01T00:00:00Z")
-    assert status("PR #1").overturned_by == "PR #2"
-    assert status("PR #2").overturned_by == "PR #3"
+    assert status("acme/api#1").overturned_by == "acme/api#2"
+    assert status("acme/api#2").overturned_by == "acme/api#3"
 
 
 def test_a_pr_that_was_never_merged_overturns_nothing():
     """Backfill keeps closed PRs too; an abandoned replacement is not one."""
     pr(1)
     pr(2, "Supersedes #1", merged=None)
-    assert status("PR #1").state == "active"
+    assert status("acme/api#1").state == "active"
 
 
 def test_a_target_lore_has_not_ingested_is_unknown_not_active():
     pr(2, "Supersedes #1")
-    assert status("PR #1").state == "unknown"
+    assert status("acme/api#1").state == "unknown"
 
 
 def test_an_edge_starts_counting_once_its_target_is_ingested():
     pr(2, "Supersedes #1")
     pr(1)
-    assert status("PR #1").state == "superseded"
+    assert status("acme/api#1").state == "superseded"
 
 
 def test_a_cycle_terminates_and_leaves_both_in_force():
     pr(1, "Supersedes #2")
     pr(2, "Supersedes #1")
-    assert status("PR #1").state == "active"
-    assert status("PR #2").state == "active"
+    assert status("acme/api#1").state == "active"
+    assert status("acme/api#2").state == "active"
 
 
 def test_a_longer_cycle_is_ignored_from_every_starting_point():
@@ -102,22 +102,22 @@ def test_a_longer_cycle_is_ignored_from_every_starting_point():
     pr(3, "Supersedes #2")
     pr(4, "Supersedes #1")
     # The 1->3->2->1 loop is ignored; #4's edge into it is not.
-    assert {s: status(f"PR #{s}").state for s in (1, 2, 3)} == {
+    assert {s: status(f"acme/api#{s}").state for s in (1, 2, 3)} == {
         1: "superseded", 2: "active", 3: "active"}
-    assert status("PR #1").overturned_by == "PR #4"
+    assert status("acme/api#1").overturned_by == "acme/api#4"
 
 
 def test_the_newest_live_overturner_is_reported():
     pr(1)
     pr(2, "Supersedes #1", merged="2026-02-01T00:00:00Z")
     pr(3, "Supersedes #1", merged="2026-03-01T00:00:00Z")
-    assert status("PR #1").overturned_by == "PR #3"
+    assert status("acme/api#1").overturned_by == "acme/api#3"
 
 
 def test_scopes_are_isolated():
     pr(1)
     pr(2, "Supersedes #1", scope="gh:other")
-    assert status("PR #1").state == "active"
+    assert status("acme/api#1").state == "active"
 
 
 # --------------------------------------------------------------- indexing
@@ -127,13 +127,13 @@ def test_reindexing_replaces_edges_instead_of_accumulating_them():
     pr(1)
     pr(2, "Supersedes #1")
     pr(2, "Unrelated now.")
-    assert status("PR #1").state == "active"
+    assert status("acme/api#1").state == "active"
 
 
 def test_files_none_keeps_previously_recorded_files():
     pr(1, files=["src/auth/session.py"])
     pr(1)  # redelivered without a GitHub token: files not fetched
-    assert [d["source"] for d in graph.decisions_touching(SCOPE, "src/auth/")] == ["PR #1"]
+    assert [d["source"] for d in graph.decisions_touching(SCOPE, "src/auth/")] == ["acme/api#1"]
 
 
 def test_files_empty_list_clears_them():
@@ -143,17 +143,17 @@ def test_files_empty_list_clears_them():
 
 
 def test_rebuild_indexes_decisions_stored_before_the_graph_existed():
-    episodic.record_event(SCOPE, kind="pr", source="PR #1", title="Old",
-                          body="PR #1: Old", repo=REPO, occurred_at="2026-01-01T00:00:00Z")
-    episodic.record_event(SCOPE, kind="pr", source="PR #2", title="New",
-                          body="PR #2: New\n\nSupersedes #1\n\nDiscussion:\n[comment] @a: replaces #9?",
+    episodic.record_event(SCOPE, kind="pr", source="acme/api#1", title="Old",
+                          body="acme/api#1: Old", repo=REPO, occurred_at="2026-01-01T00:00:00Z")
+    episodic.record_event(SCOPE, kind="pr", source="acme/api#2", title="New",
+                          body="acme/api#2: New\n\nSupersedes #1\n\nDiscussion:\n[comment] @a: replaces #9?",
                           repo=REPO, occurred_at="2026-02-01T00:00:00Z")
 
     assert graph.rebuild_links(SCOPE) == {"decisions": 2, "edges": 2}
-    assert status("PR #1").state == "superseded"
-    links = {(r["source"], r["kind"]) for r in graph.decision(SCOPE, "PR #2")["links_out"]}
+    assert status("acme/api#1").state == "superseded"
+    links = {(r["source"], r["kind"]) for r in graph.decision(SCOPE, "acme/api#2")["links_out"]}
     # The discussion's "replaces #9?" stays a mention: comments do not overturn.
-    assert links == {("PR #1", "supersedes"), ("PR #9", "references")}
+    assert links == {("acme/api#1", "supersedes"), ("acme/api#9", "references")}
 
 
 def test_inscribe_pr_indexes_links_and_files(monkeypatch):
@@ -164,8 +164,8 @@ def test_inscribe_pr_indexes_links_and_files(monkeypatch):
                       author="a", repo_full=REPO, url="", merged_at="2026-02-01T00:00:00Z",
                       files=[{"filename": "src/auth/jwt.py", "status": "added"}])
 
-    assert status("PR #1").overturned_by == "PR #2"
-    assert graph.decision(SCOPE, "PR #2")["files"] == [{"path": "src/auth/jwt.py",
+    assert status("acme/api#1").overturned_by == "acme/api#2"
+    assert graph.decision(SCOPE, "acme/api#2")["files"] == [{"path": "src/auth/jwt.py",
                                                         "change": "added"}]
 
 
@@ -176,7 +176,7 @@ def test_inscribe_commit_indexes_its_why(monkeypatch):
     canon.inscribe_commit({"hash": "abcdef1234", "message": "Drop sessions", "repo": REPO,
                            "why": "Replaces #5: the session store was a single point of failure"},
                           SCOPE)
-    assert graph.decision(SCOPE, "commit abcdef1")["links_out"][0]["source"] == "PR #5"
+    assert graph.decision(SCOPE, "commit abcdef1")["links_out"][0]["source"] == "acme/api#5"
 
 
 # ------------------------------------------------------------------ reads
@@ -186,9 +186,9 @@ def test_lineage_walks_both_directions_with_depth():
     pr(2, "Supersedes #1", merged="2026-02-01T00:00:00Z")
     pr(3, "Supersedes #2", merged="2026-03-01T00:00:00Z")
 
-    middle = graph.decision(SCOPE, "PR #2")
+    middle = graph.decision(SCOPE, "acme/api#2")
     assert [(d["source"], d["depth"], d["status"]) for d in middle["lineage"]] == [
-        ("PR #1", 1, "superseded"), ("PR #3", 1, "active")]
+        ("acme/api#1", 1, "superseded"), ("acme/api#3", 1, "active")]
     assert middle["status"] == "superseded"
 
 
@@ -197,30 +197,30 @@ def test_max_depth_trims_lineage_but_not_status():
         pr(n, f"Supersedes #{n - 1}" if n > 1 else "", merged=f"2026-0{n}-01T00:00:00Z")
     pr(5, "Reverts acme/api#4", merged="2026-05-01T00:00:00Z")
 
-    first = graph.decision(SCOPE, "PR #1", max_depth=1)
-    assert [d["source"] for d in first["lineage"]] == ["PR #2"]
+    first = graph.decision(SCOPE, "acme/api#1", max_depth=1)
+    assert [d["source"] for d in first["lineage"]] == ["acme/api#2"]
     # #4 was reverted, so #3 holds again and #1 is still superseded by #2,
     # which #3 superseded: the chain beyond depth 1 still decides status.
     assert first["status"] == "superseded"
-    assert graph.decision(SCOPE, "PR #3")["status"] == "active"
+    assert graph.decision(SCOPE, "acme/api#3")["status"] == "active"
 
 
 def test_decision_reports_unresolved_links():
     pr(2, "Supersedes #1. See #30.")
-    found = graph.decision(SCOPE, "PR #2")
+    found = graph.decision(SCOPE, "acme/api#2")
     assert {(r["source"], r["ingested"]) for r in found["links_out"]} == {
-        ("PR #1", False), ("PR #30", False)}
+        ("acme/api#1", False), ("acme/api#30", False)}
 
 
 def test_a_decision_known_only_from_an_edge_is_still_found():
     pr(2, "Supersedes #1")
-    found = graph.decision(SCOPE, "PR #1")
+    found = graph.decision(SCOPE, "acme/api#1")
     assert found["ingested"] is False
-    assert found["links_in"][0]["source"] == "PR #2"
+    assert found["links_in"][0]["source"] == "acme/api#2"
 
 
 def test_unknown_decision_is_none():
-    assert graph.decision(SCOPE, "PR #404") is None
+    assert graph.decision(SCOPE, "acme/api#404") is None
 
 
 def test_files_by_directory_newest_first_with_status():
@@ -230,14 +230,14 @@ def test_files_by_directory_newest_first_with_status():
 
     found = graph.decisions_touching(SCOPE, "src/auth/")
     assert [(d["source"], d["status"]) for d in found] == [
-        ("PR #2", "active"), ("PR #1", "superseded")]
+        ("acme/api#2", "active"), ("acme/api#1", "superseded")]
     assert found[0]["paths"] == ["src/auth/jwt.py"]
 
 
 @pytest.mark.parametrize("query", ["src/auth", "src/auth/", "/src/auth"])
 def test_directory_spellings_agree(query):
     pr(1, files=["src/auth/session.py"])
-    assert [d["source"] for d in graph.decisions_touching(SCOPE, query)] == ["PR #1"]
+    assert [d["source"] for d in graph.decisions_touching(SCOPE, query)] == ["acme/api#1"]
 
 
 def test_exact_file_match():
@@ -253,7 +253,7 @@ def test_directory_prefix_does_not_match_a_sibling_with_the_same_start():
 def test_like_wildcards_in_paths_are_literal():
     pr(1, files=["src/a_b/x.py"])
     pr(2, files=["src/aXb/x.py"])
-    assert [d["source"] for d in graph.decisions_touching(SCOPE, "src/a_b/")] == ["PR #1"]
+    assert [d["source"] for d in graph.decisions_touching(SCOPE, "src/a_b/")] == ["acme/api#1"]
 
 
 # ------------------------------------------------------------- agent tools
@@ -270,13 +270,13 @@ def test_decision_status_tool_reports_the_replacement_and_makes_it_citable():
     text = tools_by_name(collector)["decision_status"].invoke({"source": "#1"})
 
     assert "status: superseded" in text
-    assert "overturned by PR #2 (Move to JWT)" in text
-    assert {h["source"] for h in collector.hits} == {"PR #1", "PR #2"}
+    assert "overturned by acme/api#2 (Move to JWT)" in text
+    assert {h["source"] for h in collector.hits} == {"acme/api#1", "acme/api#2"}
 
 
 def test_decision_status_tool_does_not_claim_anything_without_a_record():
     collector = Collector()
-    text = tools_by_name(collector)["decision_status"].invoke({"source": "PR #404"})
+    text = tools_by_name(collector)["decision_status"].invoke({"source": "acme/api#404"})
     assert "no record" in text
     assert collector.hits == []
 
@@ -289,8 +289,8 @@ def test_decisions_for_path_tool():
 
     text = tools_by_name(collector)["decisions_for_path"].invoke({"path": "src/auth/"})
 
-    assert "[PR #1] (superseded by PR #2) Server sessions" in text
-    assert [h["source"] for h in collector.hits] == ["PR #2", "PR #1"]
+    assert "[acme/api#1] (superseded by acme/api#2) Server sessions" in text
+    assert [h["source"] for h in collector.hits] == ["acme/api#2", "acme/api#1"]
 
 
 # -------------------------------------------------------------------- API
@@ -302,11 +302,11 @@ def test_api_decision(client):
     assert response.status_code == 200
     body = response.json()
     assert (body["source"], body["status"], body["overturned_by"]) == (
-        "PR #1", "superseded", "PR #2")
+        "acme/api#1", "superseded", "acme/api#2")
 
 
 def test_api_decision_unknown_is_404(client):
-    response = client.get("/v1/graph/decision", params={"source": "PR #404", "user_id": SCOPE})
+    response = client.get("/v1/graph/decision", params={"source": "acme/api#404", "user_id": SCOPE})
     assert response.status_code == 404
 
 
@@ -332,8 +332,8 @@ def test_api_files_validation(client, params):
 
 
 def test_api_rebuild(client):
-    episodic.record_event(SCOPE, kind="pr", source="PR #2", title="New",
-                          body="PR #2: New\n\nSupersedes #1", repo=REPO)
+    episodic.record_event(SCOPE, kind="pr", source="acme/api#2", title="New",
+                          body="acme/api#2: New\n\nSupersedes #1", repo=REPO)
     response = client.post("/v1/graph/rebuild", params={"user_id": SCOPE})
     assert response.json() == {"decisions": 1, "edges": 1}
 

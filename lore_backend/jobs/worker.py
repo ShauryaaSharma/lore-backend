@@ -14,6 +14,7 @@ from lore_backend.config import settings
 from lore_backend.jobs import queue
 from lore_backend.jobs.handlers import HANDLERS
 from lore_backend.logging_setup import configure_logging
+from lore_backend.memory import semantic
 from lore_backend.storage.db import run_migrations
 
 logger = logging.getLogger("lore.worker")
@@ -22,6 +23,10 @@ logger = logging.getLogger("lore.worker")
 def run_forever() -> None:
     configure_logging()
     run_migrations()
+    try:
+        semantic.apply_source_renames()
+    except Exception:
+        logger.exception("could not apply source renames to the vector store")
     logger.info("worker started, polling every %.1fs", settings.job_poll_interval_seconds)
     next_sweep = 0.0
     while True:

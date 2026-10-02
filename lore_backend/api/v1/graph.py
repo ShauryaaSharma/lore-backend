@@ -27,8 +27,18 @@ def get_decision(
     if normalized is None:
         raise HTTPException(
             status_code=422,
-            detail="source must be a PR (`PR #482`, `#482`, `482`) or a commit (`commit 1a2b3c4`)",
+            detail="source must be a PR (`acme/api#482`, `PR #482`, `#482`, `482`) "
+                   "or a commit (`commit 1a2b3c4`)",
         )
+    try:
+        normalized = graph.resolve_source(scope, normalized)
+    except graph.AmbiguousSource as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": f"{exc.source} exists in more than one repository; "
+                               "ask again with one of these",
+                    "candidates": exc.candidates},
+        ) from exc
     found = graph.decision(scope, normalized, max_depth=depth)
     if found is None:
         raise HTTPException(status_code=404, detail=f"no decision or link recorded for {normalized}")
@@ -47,12 +57,25 @@ def get_decisions_for_path(
     return {"path": path, "count": len(decisions), "decisions": decisions}
 
 
+@router.get("/stale")
+def get_stale_decisions(
+    limit: int = Query(20, ge=1, le=100),
+    scope: str = Depends(require_scope),
+):
+    """Decisions still in force whose code has probably moved on: files
+    deleted since, or most of them changed by PRs that never said they
+    replaced it. A review queue, not a verdict -- each entry lists the PRs
+    and files behind the flag."""
+    decisions = graph.stale_decisions(scope, limit=limit)
+    return {"count": len(decisions), "decisions": decisions}
+
+
 class CheckRequest(BaseModel):
     files: list[str] = Field(..., min_length=1, max_length=500,
                              description="Paths the change touches, repository-relative")
     title: str = ""
     body: str = Field("", description="Change description; 'Supersedes #N' here is recognised")
-    repo: str = Field("", description="owner/name, so references to other repos are ignored")
+    repo: str = Field("", description="owner/name, so a bare #N in the body means this repository")
     limit: int = Field(5, ge=1, le=20)
 
 

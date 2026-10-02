@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from lore_backend.config import settings
+from lore_backend.ingestion.links import is_pr_source, pr_source
 from lore_backend.memory import episodic, graph, procedural, semantic
 from lore_backend.retrieval.seed_decisions import SEED_DECISIONS
 from lore_backend.retrieval.summarize import strip_bot_noise
@@ -99,7 +100,7 @@ def inscribe_pr(scope: str, *, number: int, title: str, body: str, threads: str,
     if clean_threads:
         text += f"\n\nDiscussion:\n{clean_threads}"
 
-    source = f"PR #{number}"
+    source = pr_source(number, repo_full)
     metadata = {"title": title[:80], "author": author, "repo": repo_full,
                 "canon": repo_full, "url": url, "date": (merged_at or "")[:10]}
 
@@ -293,7 +294,7 @@ def _answer_pipeline(question: str, scope: str, t0: float) -> dict:
 
     sources = []
     for source in verdict["matched"]:
-        kind = "PR" if str(source).lower().startswith("pr") else "memory"
+        kind = "PR" if is_pr_source(source) else "memory"
         sources.append([kind, source])
 
     return {"answer": answer, "sources": sources, "mode": "live", "path": "pipeline",
