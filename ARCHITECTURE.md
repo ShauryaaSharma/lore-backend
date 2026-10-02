@@ -157,10 +157,51 @@ later PR reverted; both read as equally authoritative forever.
   it as current. Decisions they name are added to the collector, so the
   guardrail accepts a citation of the PR that replaced one.
 
-Known limit: a decision's id is `PR #N`, unique per account scope, so two
-repositories in one account with the same PR number collide. That predates
-the graph; the extractor at least drops references qualified with a
-different repository.
+### Freshness: the one inference
+
+`status` only ever reflects what someone declared, so a decision nobody
+formally replaced reads as current forever -- even after three PRs rewrote
+the code it was about. `memory/freshness.py` adds a separate `freshness`:
+a decision still in force is *possibly outdated* when, after it merged, a
+later merged PR deleted one of its files, or later merged PRs changed at
+least half of its files across at least two PRs (`STALE_MIN_FILE_SHARE`,
+`STALE_MIN_LATER_CHANGES`).
+
+It never overrides `status`, and it errs towards silence:
+
+- Later PRs linked to the decision in either direction do not count. Their
+  authors knew about it and did not say it was replaced.
+- Unmerged PRs, earlier PRs, and decisions with no recorded files are not
+  evidence either way.
+- Every flag carries the PRs and files behind it.
+
+It surfaces in `GET /v1/graph/decision`, as a warning on the PR decision
+check (where the PR's author is often the right person to write
+"Supersedes #N"), in the agent's `decision_status` tool -- which tells the
+model to hedge, not to call the decision replaced -- and as a review queue
+at `GET /v1/graph/stale`.
+
+Known limit: a rename is recorded under the new path only, so a decision
+whose files were renamed away does not register as changed.
+
+### Decision ids
+
+A PR decision is `owner/name#482`, GitHub's own notation, lowercased. It
+used to be `PR #482`, unique per account scope -- and one account's Canon
+spans many repositories, so the second #482 overwrote the first.
+
+- A bare `#12` in a PR means PR 12 of *that PR's* repository; `other/repo#12`
+  and full URLs keep theirs, so links across repositories resolve.
+- People and models still say "PR #482". `graph.resolve_source` maps that to
+  the one repository that has a #482, or reports the candidates when more
+  than one does (a 409 from the API; a question back from the agent tool).
+  The guardrail likewise accepts a "[PR #482]" citation only when exactly
+  one retrieved source is a #482.
+- Migration 0004 renames existing rows in Postgres. The vector store cannot
+  be renamed from SQL, so each rename is recorded in `source_renames` and
+  applied to the store by `semantic.apply_source_renames()` when the API or
+  worker starts -- moving the stored vector rather than re-embedding, and
+  retrying anything that fails on the next start.
 
 ### Write-through, then compact
 

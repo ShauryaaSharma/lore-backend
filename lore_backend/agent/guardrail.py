@@ -63,10 +63,7 @@ def check(answer: str, retrieved: list[dict]) -> dict:
     matched: list[str] = []
     unknown: list[str] = []
     for raw in citations:
-        norm = _normalise(raw)
-        # A citation matches if it is, or contains, a known source label —
-        # "[PR #482 — Move to JWT]" should satisfy a source of "PR #482".
-        hit = next((src for key, src in known.items() if key and (key in norm or norm in key)), None)
+        hit = _match(_normalise(raw), known)
         if hit:
             if hit not in matched:
                 matched.append(hit)
@@ -101,6 +98,42 @@ def check(answer: str, retrieved: list[dict]) -> dict:
 
     return _result("violation", matched, unknown,
                    "decisions were retrieved but the answer cites none of them")
+
+
+_UNQUALIFIED_PR = re.compile(r"^(?:pr)?(#\d+)$")
+
+
+def _match(norm: str, known: dict[str, str]) -> str | None:
+    """The retrieved source a normalised citation refers to, if any.
+
+    One label must start the other, and the shorter must not stop partway
+    through a number: "[PR #482 — Move to JWT]" cites `PR #482`, but
+    "[PR #48]" does not -- plain substring matching used to accept it,
+    letting a model cite a PR it never retrieved whenever a longer number
+    sharing its digits had been.
+
+    Decisions are labelled `owner/name#482`, and models often cite them as
+    "[PR #482]" anyway. That is accepted only when exactly one retrieved
+    source carries #482; otherwise the citation does not say which.
+    """
+    if not norm:
+        return None
+    for key, src in known.items():
+        shorter, longer = sorted((key, norm), key=len)
+        if not longer.startswith(shorter) or longer[len(shorter):len(shorter) + 1].isdigit():
+            continue
+        # A citation shorter than the label must still carry its whole id:
+        # "[#482]" for "#482 — Move to JWT" yes, a bare "[PR]" never.
+        if shorter is norm and norm != key and not norm[-1:].isdigit():
+            continue
+        return src
+    if m := _UNQUALIFIED_PR.match(norm):
+        number = m.group(1)
+        candidates = [src for key, src in known.items()
+                      if key.endswith(number) and not key[:-len(number)][-1:].isdigit()]
+        if len(candidates) == 1:
+            return candidates[0]
+    return None
 
 
 def _result(status: str, matched: list[str], unknown: list[str], reason: str) -> dict:

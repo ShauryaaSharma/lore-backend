@@ -22,9 +22,8 @@ def check(scope: str, files: list[str], *, title: str = "", body: str = "",
     """Decisions in force behind `files`, and which of them this change
     says it overturns. `number` is the change's own PR, never reported
     against itself."""
-    found = graph.decisions_for_files(scope, files, limit=limit,
-                                      exclude=pr_source(number) if number else "")
-    self_source = pr_source(number) if number else ""
+    self_source = pr_source(number, repo) if number else ""
+    found = graph.decisions_for_files(scope, files, limit=limit, exclude=self_source)
     declared = {
         link.to_source: link.kind
         for link in extract_links(title=title, body=body, repo=repo, self_source=self_source)
@@ -57,6 +56,10 @@ def render(result: dict) -> str:
                  f"{where} {paths}"]
         if d.get("declared"):
             parts.append(f"**this PR says it {d['declared']} it**")
+        elif d.get("freshness") == "possibly_outdated":
+            # A reviewer should weigh this one as history in waiting, and
+            # the author of this PR may be the one to say so.
+            parts.append(f"⚠️ {d['freshness_note']}")
         lines.append("- " + " · ".join(parts))
         if d.get("summary"):
             lines.append(f"  > {d['summary']}")

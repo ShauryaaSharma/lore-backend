@@ -98,9 +98,11 @@ Memory is three tiers, because they answer different questions:
 
 On top of them sits the **decision graph**: which decisions superseded or
 reverted which, and what code each one changed. It is what lets Lore say a
-decision is history rather than present it as current. Edges are read from
-PR text by fixed rules ("Supersedes #12", GitHub's "Reverts acme/api#12"),
-never by a model, and each keeps the sentence it came from as evidence.
+decision is history rather than present it as current. Decisions are
+identified as `owner/name#482`, so two repositories' #482s stay separate.
+Edges are read from PR text by fixed rules ("Supersedes #12", GitHub's
+"Reverts acme/api#12"), never by a model, and each keeps the sentence it
+came from as evidence.
 Only a revert undoes: if B replaced A and C replaced B, A stays replaced,
 but reverting a revert restores the original. Status is walked with a
 recursive query on read rather than stored.
@@ -122,8 +124,9 @@ Details in [ARCHITECTURE.md](ARCHITECTURE.md).
 | `GET /v1/why/history` | Recently answered questions for this Canon |
 | `GET /v1/canon`, `GET /v1/memories` | Cursor-paginated dump of the Canon |
 | `POST /v1/lore` | Free-text search, no composed answer |
-| `GET /v1/graph/decision?source=PR #482` | Is it still in force? What overturned it, its lineage, links, files |
+| `GET /v1/graph/decision?source=acme/api#482` | Is it still in force? What overturned it, its lineage, links, files |
 | `GET /v1/graph/files?path=src/auth/` | Decisions that changed a file or directory, newest first, with status |
+| `GET /v1/graph/stale` | Decisions still in force that the code has probably moved on from |
 | `POST /v1/graph/check` | The PR decision check, for a list of files: from the CLI or a pre-push hook |
 | `POST /v1/graph/rebuild` | Re-derive links for decisions ingested before the graph existed |
 | `POST /v1/ingest/seed` | Load the seed corpus (LIVE mode) |
@@ -209,4 +212,22 @@ dependency (`lore_backend/examples/kafka_ingestion/requirements.txt`).
 
 Point the App's webhook URL at `<your-host>/webhook/github` and set
 `GITHUB_WEBHOOK_SECRET` / `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`. The
-payload shapes handled are in `lore_backend/ingestion/webhook_handler.py`.
+payload shapes handled are in `lore_backend/ingestion/webhook_handler.py`
+and `lore_backend/ingestion/mentions.py`.
+
+Subscribe the App to **Pull request**, **Installation** and **Issue
+comment** events, with read access to contents and pull requests and write
+access to issues (comments and reactions).
+
+### Asking in the thread
+
+Comment `@lore why is this a JWT and not a session?` on a PR or issue and
+Lore answers in that thread, with linked sources. The webhook reacts 👀 and
+queues the question; the worker answers it through the same agent and
+citation guardrail as `/why`, so the background worker must be running.
+
+Only comment authors whose association is in
+`MENTION_ALLOWED_ASSOCIATIONS` (default `OWNER,MEMBER,COLLABORATOR`) can
+trigger an answer: on a public repository anyone can comment, and each
+answer is an LLM run. Bot comments are never answered, so Lore cannot reply
+to itself. `MENTION_TRIGGER` changes `@lore` to match your App's name.
