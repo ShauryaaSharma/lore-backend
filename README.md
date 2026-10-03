@@ -9,8 +9,18 @@ team's decision memory. Captures the *why* behind merged pull requests (via a
 GitHub App) and answers `/why` questions with cited, sourced answers.
 
 A LangGraph agent that can go fetch what it doesn't have, over three memory
-tiers and a decision graph, behind a guardrail that won't ship an uncited answer. Runs entirely on
-free and self-hosted services.
+tiers and a decision graph, behind a guardrail that won't ship an uncited
+answer. Runs entirely on free and self-hosted services.
+
+It also works where the questions come up, inside GitHub:
+
+- **Decision check.** When a PR opens, Lore's comment lists the decisions
+  still in force behind the files it changes, with the reasoning for each.
+- **`@lore why ...?`** in a PR or issue thread gets an answer in that thread,
+  with linked sources.
+- **Stale-decision warnings.** A decision nobody formally replaced, but whose
+  code has changed a lot since, is flagged as possibly outdated instead of
+  being presented as current.
 
 Companion repos: [`lore-cli`](https://github.com/lorehasit/lore-cli) (the
 `npx lore` git-hook CLI that captures commit `Why:` trailers) and
@@ -72,6 +82,7 @@ migration runner work from an install with no checkout.
 | Embeddings + reranking | fastembed (ONNX, CPU) | $0, no API |
 | Semantic memory | Qdrant (or pgvector) | free / self-host |
 | Episodic memory + control plane | PostgreSQL | self-hosted |
+| Decision graph | PostgreSQL, recursive CTEs | self-hosted |
 | Job queue | Postgres `FOR UPDATE SKIP LOCKED` | no broker |
 | Tracing + eval | Langfuse | OSS, self-host |
 | Auth | DB-backed API keys, sha256-hashed | — |
@@ -113,6 +124,15 @@ first, then same directory) with the reasoning each was made for, and flags
 any the PR says it supersedes or reverts. `/why` only helps someone who
 already suspects there is a reason; this reaches the reviewer who does not.
 No model in that path. Turn it off with `PR_DECISION_CHECK_ENABLED=false`.
+
+A decision's status only reflects what someone declared, and people rarely
+write "Supersedes #12". So the graph also judges **freshness**: a decision
+still in force is *possibly outdated* when, after it merged, later PRs that
+never mention it deleted one of its files, or changed at least half of them
+across at least two PRs. It is an inference, so it is reported next to the
+status and never replaces it, and every flag lists the PRs and files behind
+it. It shows as a warning in the decision check, makes `/why` hedge rather
+than present the decision as current, and is listed at `GET /v1/graph/stale`.
 
 Details in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -181,6 +201,23 @@ knowing:
 | `CONSOLIDATE_AFTER_N_EVENTS` | `25` | When the summarizer distils a tenant's backlog |
 | `JUDGE_ENABLED` | `false` | LLM-as-judge in the eval report |
 | `EVAL_HIT_RATE_FLOOR` | `0.9` | What the eval gate enforces |
+| `PR_DECISION_CHECK_ENABLED` | `true` | List the decisions behind a PR's files in its comment |
+| `PR_DECISION_CHECK_LIMIT` | `5` | How many decisions that comment lists |
+| `MENTION_TRIGGER` | `@lore` | The handle that asks Lore a question in a thread |
+| `MENTION_ALLOWED_ASSOCIATIONS` | `OWNER,MEMBER,COLLABORATOR` | Who can trigger an answer |
+| `STALE_MIN_FILE_SHARE` | `0.5` | Share of a decision's files changed since, to flag it |
+| `STALE_MIN_LATER_CHANGES` | `2` | Fewest later PRs that must have changed them |
+
+## Upgrading
+
+Migrations run automatically when the API or worker starts.
+
+Migration `0004` renames PR decisions from `PR #482` to `acme/api#482`, so two
+repositories' #482s no longer overwrite each other. Postgres is renamed in the
+migration itself. The vector store is renamed by the API or worker on its
+next start, reusing the stored vectors (no re-embedding); anything that fails
+is retried on the start after. Decisions ingested before the graph existed
+get their links from `POST /v1/graph/rebuild`.
 
 ## Local dev (no Docker)
 
