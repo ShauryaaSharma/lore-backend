@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Inside lore-backend</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -195,22 +197,24 @@ figcaption{font-size:13px;color:var(--ink-soft);margin-top:9px;line-height:1.55;
     <li><a href="#ch9"><span class="n">09</span><span>Jobs and the Postgres queue</span></a></li>
     <li><a href="#ch10"><span class="n">10</span><span>Resilience</span></a></li>
     <li><a href="#ch11"><span class="n">11</span><span>LLM Ops: trace, eval, gate</span></a></li>
+    <li class="grp">Inside GitHub</li>
+    <li><a href="#ch-graph"><span class="n">12</span><span>The decision graph, and Lore in the review</span></a></li>
     <li class="grp">Defending it</li>
-    <li><a href="#ch12"><span class="n">12</span><span>System design review: what's wrong</span></a></li>
-    <li><a href="#ch13"><span class="n">13</span><span>The topics this project attracts</span></a></li>
-    <li><a href="#ch14"><span class="n">14</span><span>Interview questions and answers</span></a></li>
+    <li><a href="#ch12"><span class="n">13</span><span>System design review: what's wrong</span></a></li>
+    <li><a href="#ch13"><span class="n">14</span><span>The topics this project attracts</span></a></li>
+    <li><a href="#ch14"><span class="n">15</span><span>Interview questions and answers</span></a></li>
   </ul>
 </nav>
 
 <main class="doc">
 <header class="masthead">
-  <p class="kicker">lore-backend · 5,400 lines · Python 3.10+</p>
+  <p class="kicker">lore-backend · 6,200 lines · Python 3.10+</p>
   <h1>Inside lore-backend</h1>
   <p class="standfirst">A FastAPI service that remembers <em>why</em> an engineering team built things the way they did — and a LangGraph agent that refuses to answer without a citation. This is the whole system, taken apart chapter by chapter, then argued with.</p>
   <dl class="meta-strip">
     <div><dt>Harness</dt><dd>LangGraph StateGraph</dd></div>
     <div><dt>Loop</dt><dd>4 hops, tool-calling</dd></div>
-    <div><dt>Memory</dt><dd>3 tiers</dd></div>
+    <div><dt>Memory</dt><dd>3 tiers + a decision graph</dd></div>
     <div><dt>Stores</dt><dd>Postgres + Qdrant</dd></div>
     <div><dt>Model</dt><dd>Groq Llama 3.3 70B</dd></div>
   </dl>
@@ -299,7 +303,8 @@ figcaption{font-size:13px;color:var(--ink-soft);margin-top:9px;line-height:1.55;
   agent/         THE HARNESS
     graph.py       StateGraph: agent -> tools -> agent -> guardrail -> END
     tools.py       search_canon, recent_decisions, fetch_pr_diff,
-                     search_commits, post_comment — built per request
+                     search_commits, decision_status, decisions_for_path,
+                     post_comment — built per request
     guardrail.py   citation verification; rejects ungrounded answers
     state.py       GraphState — ephemeral, reducer-annotated
 
@@ -308,13 +313,17 @@ figcaption{font-size:13px;color:var(--ink-soft);margin-top:9px;line-height:1.55;
     semantic.py    Qdrant or pgvector, called directly
     episodic.py    Postgres — decision_events, why_queries
     consolidate.py summarizer agent: episodic -> semantic
+    graph.py       decision graph: links, status on read, lineage
+    freshness.py   "possibly outdated": the graph's one inference
 
   obs/tracing.py   Langfuse behind a null object; never raises, never blocks
   eval/            golden_set.py, harness.py, judge.py — the release gate
   api/             FastAPI routers only — no business logic
   auth/            API keys (hashed, DB-backed + env fallback), scope, ratelimit
-  ingestion/       GitHub App client, webhook handling, delivery dedup
-  retrieval/       canon.py (dispatch + writes), rerank.py, summarize.py
+  ingestion/       GitHub App client, webhook handling, delivery dedup,
+                   links.py (edges read from PR text), mentions.py (@lore)
+  retrieval/       canon.py (dispatch + writes), rerank.py, summarize.py,
+                   decision_check.py (the PR comment's decision list)
   jobs/            Postgres queue (FOR UPDATE SKIP LOCKED) + worker
   storage/         connection pool, migration runner, hand-written SQL
   resilience/      retry with backoff+jitter, circuit breaker
@@ -348,7 +357,7 @@ migrations/      plain numbered .sql, applied in order</code></pre>
     <li>A PR merges. GitHub fires a webhook to <code>POST /webhook/github</code>.</li>
     <li>The raw body is verified with <strong>HMAC-SHA256</strong> against the webhook secret, compared in constant time.</li>
     <li>The <code>X-GitHub-Delivery</code> id is checked against a <code>webhook_deliveries</code> ledger — GitHub retries on any non-2xx, so this stops double-inscribing.</li>
-    <li><code>canon.inscribe_pr(...)</code> writes the decision to <strong>episodic memory</strong> (Postgres, raw and dated) <em>and</em> <strong>semantic memory</strong> (vector store, searchable now).</li>
+    <li><code>canon.inscribe_pr(...)</code> writes the decision to <strong>episodic memory</strong> (Postgres, raw and dated) <em>and</em> <strong>semantic memory</strong> (vector store, searchable now), and indexes its links to other decisions and the files it changed in the <strong>decision graph</strong> (<a href="#ch-graph">Chapter 12</a>).</li>
     <li>Later, the worker's summarizer distils the raw text into a durable fact and overwrites the semantic entry in place.</li>
   </ol>
   <p>There is a second entry path: <code>POST /v1/inscribe</code>, which the <code>npx lore</code> git hook calls with a commit's <code>Why:</code> trailer. It honours an <code>Idempotency-Key</code> header.</p>
@@ -689,7 +698,7 @@ return graph.compile()</code></pre>
   <h2>Loop engineering</h2>
   <p class="lede">The harness is the machinery. The loop is the behaviour: what the model can reach for, what it costs, how it's bounded, and how it's stopped from doing something it shouldn't.</p>
 
-  <h3>The five tools</h3>
+  <h3>The seven tools</h3>
   <div class="tw"><table>
     <thead><tr><th>Tool</th><th>Reaches</th><th>When the model should use it</th></tr></thead>
     <tbody>
@@ -697,6 +706,8 @@ return graph.compile()</code></pre>
       <tr><td><code>recent_decisions</code></td><td>Episodic memory (Postgres, <code>ORDER BY occurred_at DESC</code>)</td><td>"Lately", "last month" — similarity search cannot order by time.</td></tr>
       <tr><td><code>fetch_pr_diff</code></td><td>GitHub REST, live</td><td>The question names a PR the Canon has no decision for. <strong>This is the tool the whole v2 rewrite exists for.</strong></td></tr>
       <tr><td><code>search_commits</code></td><td>GitHub commit search API</td><td>A reason recorded as a <code>Why:</code> trailer that never reached a PR discussion.</td></tr>
+      <tr><td><code>decision_status</code></td><td>The decision graph (Postgres)</td><td>Before presenting a decision as current: was it superseded, reverted, or is it possibly outdated? Decisions it names become citable.</td></tr>
+      <tr><td><code>decisions_for_path</code></td><td>The decision graph (Postgres)</td><td>The question names code ("why is <code>src/auth/</code> like this?") rather than a topic.</td></tr>
       <tr><td><code>post_comment</code></td><td>GitHub, <strong>write</strong></td><td>Only when explicitly asked. The one outward side effect — and only bound to the model at all when <code>allow_writes=True</code>.</td></tr>
     </tbody>
   </table></div>
@@ -889,12 +900,13 @@ else:                             -> violation    "decisions retrieved, cites no
     </dl>
   </div>
 
-  <div class="finding high">
-    <div class="f-head"><h3>2. The substring match accepts citations it shouldn't</h3><span class="chip high">bug</span></div>
+  <div class="finding med">
+    <div class="f-head"><h3>2. The substring match accepted citations it shouldn't</h3><span class="chip ok">fixed</span></div>
     <dl>
       <div class="f-row"><dt>What's there</dt><dd><code>key in norm or norm in key</code> — matching in both directions, on normalised strings with punctuation stripped.</dd></div>
       <div class="f-row"><dt>Why it's wrong</dt><dd><p>Retrieved source <code>"PR #482"</code> normalises to <code>pr#482</code>. An answer citing <code>[PR #4]</code> normalises to <code>pr#4</code>, and <code>"pr#4" in "pr#482"</code> is <strong>True</strong>. So a citation of a PR that was never retrieved is accepted, and the response reports the source as <code>PR #482</code>.</p><p>That is the exact failure the module exists to prevent, reachable through its own matcher. Every short numeric label is a prefix of some longer one.</p></dd></div>
       <div class="f-row"><dt>What it should be</dt><dd>The <em>forward</em> direction is the one with a rationale — the model quoting a longer label that contains the stored id. The reverse direction has none. Restricting it to <code>key in norm</code>, plus a token-boundary check so <code>pr#4</code> can't match inside <code>pr#482</code>, keeps the intended behaviour and closes the hole. Better still, make the identifier explicit rather than inferred: give each retrieved decision a short opaque tag the model is asked to cite, and match on equality.</dd></div>
+      <div class="f-row"><dt>What was done</dt><dd><p>Fixed alongside the decision-id change (<a href="#ch-graph">Chapter 12</a>). One label must now start the other and the shorter one must not stop partway through a number, so <code>[PR #48]</code> no longer matches a retrieved <code>PR #482</code>; a citation shorter than the label must carry its whole id, so a bare <code>[PR]</code> matches nothing. The tests that pin it were checked by putting the old matcher back and watching them fail.</p><p>The opaque-tag idea still stands as the cleaner end state: equality on an explicit id rather than rules about prefixes.</p></dd></div>
     </dl>
   </div>
   <p>Two smaller ones worth having in your pocket: an answer can be padded with unbracketed prose claims as long as it contains no <code>#\d+</code> or sha (the <code>_SPECIFIC</code> regex is the only thing catching uncited specifics); and <code>looks_like_abstention</code> is a fixed list of eight English phrases, so it's brittle to paraphrase and to any language but English.</p>
@@ -1307,9 +1319,86 @@ sleep_for = random.uniform(0, delay)          # full jitter</code></pre>
   <p>One more honest note the ADR itself records: the CI workflow was removed from the repo, so "the gate" today means <code>pytest</code> plus running the harness manually. The scoring and floors are unchanged; only the thing invoking them went away. Re-attaching it is a workflow file, not a code change — and saying that is much better than implying CI runs it.</p>
 </section>
 
+<!-- ============================ CH 12 (graph) ============================ -->
+<section class="chapter" id="ch-graph">
+  <p class="chap-num">Chapter 12</p>
+  <h2>The decision graph, and Lore in the review</h2>
+  <p class="lede">The three memory tiers answer <em>what</em> was decided and <em>when</em>. None of them can answer the question that matters most to someone about to rely on a decision: is it still true? This chapter is the layer that answers it, and the three features that put it in front of reviewers inside GitHub.</p>
+
+  <h3>The gap it closes</h3>
+  <p>A PR that moved auth to JWTs reads as the current decision forever — even after a later PR reverted it. Semantic search finds it because it is relevant; episodic memory dates it; nothing marks it as history. So <code>/why</code> would present a reverted decision as the answer, with a valid citation, and the guardrail would pass it. Correctly sourced, and wrong.</p>
+
+  <h3>Nodes and edges</h3>
+  <p>Nodes are the existing <code>decision_events</code> rows. Edges live in <code>decision_links</code>; the files each decision changed live in <code>decision_files</code>.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Edge</th><th>Read from</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>supersedes</code></td><td>"Supersedes #12", "Replaces #12", "Obsoletes #12" in the title or body</td><td>Overturns the target</td></tr>
+      <tr><td><code>reverts</code></td><td>GitHub's own "Reverts acme/api#12", or "This reverts commit 1a2b3c4"</td><td>Overturns the target, and is the only thing that can undo an overturn</td></tr>
+      <tr><td><code>references</code></td><td>Any other mention of a PR, including in review comments</td><td>None on status; it counts as awareness for freshness (below)</td></tr>
+    </tbody>
+  </table></div>
+  <p>Three decisions worth being able to defend:</p>
+  <ul>
+    <li><strong>Regexes, not a model.</strong> An edge that says one decision overturned another changes what <code>/why</code> may present as current — not a claim to hallucinate. Each edge keeps the sentence it was read from as evidence, so any edge can be checked by reading it. The cost is recall: "we're dropping the approach from #12" is not caught.</li>
+    <li><strong>Review comments never overturn.</strong> "Does this supersede #8?" is a question, not a decision. Comments only ever produce plain references. Closing keywords ("Fixes #40") are skipped entirely because they point at issues.</li>
+    <li><strong>No foreign keys.</strong> "Supersedes #12" is true even when #12 predates the backfill window. The edge is stored, reported as unresolved, and starts counting the moment #12 is ingested.</li>
+  </ul>
+
+  <h3>Status is computed on read</h3>
+  <p>A recursive CTE walks the overturning edges around a decision in both directions — cycle-guarded with a path array, depth-capped — and Python decides the status from that small component:</p>
+  <pre><code>with recursive walk(source, depth, path) as (
+    select s, 0, array[s] from unnest(%(starts)s::text[]) as s
+    union all
+    select nxt.source, w.depth + 1, w.path || nxt.source
+    from walk w
+    join decision_links l on l.scope = %(scope)s
+     and l.kind = any('{supersedes,reverts}')
+     and (l.from_source = w.source or l.to_source = w.source)
+    cross join lateral (select case when l.from_source = w.source
+                                    then l.to_source else l.from_source end) nxt(source)
+    where w.depth &lt; %(max_depth)s and not nxt.source = any(w.path)
+)
+select source, min(depth) from walk group by source;</code></pre>
+  <p>The rule: <strong>overturned unless the overturner was itself reverted.</strong> Only a revert undoes. If B replaced A and C later replaced B, A stays replaced — a chain of replacements does not resurrect the original. If B reverted A and C reverted B, A is back. Edges on a cycle, edges from unmerged PRs (stored without a merge date) and edges from decisions Lore has not ingested do not count.</p>
+  <p>Why on read and not stored: storing status means recomputing every downstream node whenever an edge arrives, and the connected component around one decision is small. Both of the rule's subtleties were caught by tests before they shipped — the first version resurrected A in the chain case, and a two-node cycle gave a different answer depending on which node you asked about.</p>
+
+  <h3>Freshness: the graph's one inference</h3>
+  <p>Status only reflects what someone declared, and people rarely write "Supersedes". So a decision still in force is also judged for <strong>freshness</strong>: it is <em>possibly outdated</em> when, after it merged, a later merged PR deleted one of its files, or later merged PRs changed at least half of its files across at least two PRs.</p>
+  <ul>
+    <li><strong>Kept apart from status.</strong> It is reported next to <code>status</code> and never replaces it. The agent's tool tells the model to hedge — "may no longer hold" — not to call the decision replaced.</li>
+    <li><strong>Biased towards silence.</strong> Later PRs linked to the decision in either direction do not count: their authors knew it existed and chose not to say it was replaced. Unmerged PRs, earlier PRs and decisions with no recorded files are not evidence. A false "possibly outdated" teaches people to ignore the warning, so most of its tests are about what must <em>not</em> flag.</li>
+    <li><strong>Every flag carries its evidence:</strong> which later PRs, which files.</li>
+  </ul>
+
+  <h3>Where Lore meets the reviewer</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Feature</th><th>Trigger</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Decision check</strong></td><td>A PR opens</td><td>Lore's comment lists the decisions still in force behind the files it changes — same file before same directory, then by overlap and recency — with the reasoning for each, a warning on any that are possibly outdated, and a note on any the PR says it replaces. No model in this path. Also callable before a PR exists, via <code>POST /v1/graph/check</code>.</td></tr>
+      <tr><td><strong><code>@lore why …?</code></strong></td><td>A comment in a PR or issue thread</td><td>The webhook reacts 👀 and enqueues; the worker answers through the same agent and guardrail as <code>/why</code> and replies in the thread. Split in two because GitHub gives a webhook ~10 s and the agent can take longer; posting is the last step, so a retried job never posts twice.</td></tr>
+      <tr><td><strong>Stale queue</strong></td><td><code>GET /v1/graph/stale</code></td><td>Active decisions the code has probably moved on from, deleted files first.</td></tr>
+    </tbody>
+  </table></div>
+  <p>The mention feature's safety rules are the interesting part. Only <code>OWNER</code>, <code>MEMBER</code> and <code>COLLABORATOR</code> can trigger an answer by default — on a public repository anyone can comment, and each answer is an LLM run on your quota. Bot comments are ignored, or Lore's reply (which quotes the question) would trigger Lore. Quoted lines and fenced code are skipped, so quoting an earlier question does not ask it again.</p>
+
+  <h3>Decision ids: <code>owner/name#482</code></h3>
+  <p>PRs used to be stored as <code>PR #482</code>, unique per account. One account's Canon spans many repositories, and <code>record_event</code> upserts on <code>(scope, source)</code> — so when a second repository merged its own #482, it <strong>silently overwrote the first</strong>. The id is now GitHub's own notation, lowercased.</p>
+  <p>The migration is the instructive part. Postgres is renamed in SQL (migration <code>0004</code>), including qualifying bare <code>#12</code> edge targets with the repository of the PR they came from. The vector store is not in Postgres, so the migration records each rename in <code>source_renames</code>, and the API and worker apply them at startup — moving each stored vector rather than re-embedding, claiming rows before touching the store so two processes don't race, and un-claiming on failure so the next start retries. "PR #482" as people and models type it still resolves when exactly one repository has a #482; otherwise the API answers 409 with the candidates.</p>
+
+  <h3>Where it is weakest — raise these yourself</h3>
+  <ul>
+    <li><strong>Recall of the extractor.</strong> Fixed phrasings only. Paraphrased replacements are missed, and "Superseded by #99" written in the older PR is kept as a plain mention rather than reversed into an edge.</li>
+    <li><strong>Renames.</strong> GitHub records a renamed file under its new path, so a decision whose files were renamed away does not register as changed.</li>
+    <li><strong>Freshness thresholds are judgement, not measurement.</strong> Half the files across two PRs is a reasonable default, not a tuned one, which is why both are settings.</li>
+    <li><strong>The GitHub-facing features have only been tested with GitHub faked</strong> at the client boundary — the webhook, the job, the reply format — not against an installed App on a real repository.</li>
+  </ul>
+</section>
+
+
 <!-- ============================ CH 12 ============================ -->
 <section class="chapter" id="ch12">
-  <p class="chap-num">Chapter 12</p>
+  <p class="chap-num">Chapter 13</p>
   <h2>System design review: what's wrong</h2>
   <p class="lede">Read with a system designer's eyes, not an author's. Nothing here is code you should change — it's the argument you need ready when an interviewer finds it first. Bringing these up yourself converts every one of them from a gap into evidence that you can review a system.</p>
 
@@ -1481,7 +1570,7 @@ page = items[cursor:cursor + page_size]      # all_memories() defaults to limit=
 
 <!-- ============================ CH 13 ============================ -->
 <section class="chapter" id="ch13">
-  <p class="chap-num">Chapter 13</p>
+  <p class="chap-num">Chapter 14</p>
   <h2>The topics this project attracts</h2>
   <p class="lede">Interviewers use your project as a launchpad into standard topics. These are the ones this codebase opens the door to. For each: the concept, and the one thing from this project you should reach for as evidence.</p>
 
@@ -1540,7 +1629,7 @@ page = items[cursor:cursor + page_size]      # all_memories() defaults to limit=
 
 <!-- ============================ CH 14 ============================ -->
 <section class="chapter" id="ch14">
-  <p class="chap-num">Chapter 14</p>
+  <p class="chap-num">Chapter 15</p>
   <h2>Interview questions and answers</h2>
   <p class="lede">Thirty questions, grouped, with what's actually being tested and where the trap is. Answer out loud until the shape of each comes automatically — the structure matters more than the wording.</p>
 
@@ -1652,7 +1741,7 @@ page = items[cursor:cursor + page_size]      # all_memories() defaults to limit=
     <h3><span class="qn">Q12</span>Can I get a wrong answer past your guardrail?</h3>
     <dl>
       <div class="qa-row"><dt>Testing</dt><dd>Whether you know the limits of your own safety property.</dd></div>
-      <div class="qa-row answer"><dt>Answer</dt><dd>"Yes, two ways, and I know both. First, it verifies citation <em>existence</em>, not citation <em>support</em>: once one citation resolves, the rest of the answer is unchecked, so 'we chose Postgres because Priya blocked it [PR #482]' passes even if PR #482 says neither of those things. Worth noting the ADR overclaims here — it says every claim must map to a decision id, and the code checks that every bracketed citation resolves. Second, there's a matching bug: normalised matching runs in both directions, so citing <code>[PR #4]</code> matches a retrieved <code>PR #482</code>, because <code>pr#4</code> is a substring of <code>pr#482</code>. The forward direction has a rationale — the model quoting a longer label containing the id — the reverse doesn't. The fix is a token-boundary check, or better, giving each retrieved decision an opaque tag and matching on equality."</dd></div>
+      <div class="qa-row answer"><dt>Answer</dt><dd>"Yes, two ways, and I know both. First, it verifies citation <em>existence</em>, not citation <em>support</em>: once one citation resolves, the rest of the answer is unchecked, so 'we chose Postgres because Priya blocked it [PR #482]' passes even if PR #482 says neither of those things. Worth noting the ADR overclaims here — it says every claim must map to a decision id, and the code checks that every bracketed citation resolves. Second, there was a matching bug I found and fixed: normalised matching ran in both directions, so citing <code>[PR #4]</code> matched a retrieved <code>PR #482</code>, because <code>pr#4</code> is a substring of <code>pr#482</code>. Now one label must start the other and the match must end on a number boundary. I'd still rather end at an opaque tag per retrieved decision and match on equality."</dd></div>
       <div class="qa-row"><dt>Trap</dt><dd>Saying no. Every guardrail has a bypass; the question is whether you've looked.</dd></div>
     </dl>
   </div>
@@ -1797,8 +1886,41 @@ page = items[cursor:cursor + page_size]      # all_memories() defaults to limit=
     </dl>
   </div>
 
+
+  <h3>The decision graph</h3>
+
+  <div class="qa">
+    <h3><span class="qn">Q31</span>Why read the edges with regexes instead of asking the model?</h3>
+    <dl>
+      <div class="qa-row answer"><dt>Answer</dt><dd>"Because an edge changes what the system is allowed to present as current. If the model invents 'PR #520 supersedes #482', <code>/why</code> starts calling a live decision history, with a citation. A regex either matched a sentence a human wrote or it didn't, and every edge keeps that sentence as evidence. I'm trading recall for precision on purpose: a missed edge leaves a decision looking current, which freshness partly catches; an invented edge is a confident wrong answer."</dd></div>
+      <div class="qa-row"><dt>Follow-up</dt><dd>"So what about recall?" — Freshness is the answer: it infers what nobody declared, but only as a hedge, never as a status.</dd></div>
+    </dl>
+  </div>
+
+  <div class="qa">
+    <h3><span class="qn">Q32</span>Why compute status on read instead of storing it?</h3>
+    <dl>
+      <div class="qa-row answer"><dt>Answer</dt><dd>"Status depends on the whole chain: whether my overturner was itself reverted, and whether that revert was reverted. Storing it means every new edge has to recompute everything downstream, and get the ordering right when edges arrive out of order — which they do, because 'Supersedes #12' can arrive before #12 is ingested. The component around one decision is a handful of rows, so a recursive CTE plus a small Python walk on read is cheap and can't go stale."</dd></div>
+      <div class="qa-row"><dt>Trap</dt><dd>Not knowing the rule. 'Only a revert undoes' — B replacing A, then C replacing B, does not bring A back.</dd></div>
+    </dl>
+  </div>
+
+  <div class="qa">
+    <h3><span class="qn">Q33</span>How did you migrate the decision ids without breaking the vector store?</h3>
+    <dl>
+      <div class="qa-row answer"><dt>Answer</dt><dd>"Postgres renames in the migration itself. The vector store can't be touched from SQL, so the migration writes each rename to a table, and the app applies them at startup — moving the existing vector to the new id instead of re-embedding. Rows are claimed with an update-returning before the store is touched, so two processes starting together don't move the same point, and a failure un-claims the row so the next start retries. If a PR was already re-ingested under the new id, the stale old point is dropped rather than overwriting the fresh one."</dd></div>
+    </dl>
+  </div>
+
+  <div class="qa">
+    <h3><span class="qn">Q34</span>Anyone can comment on a public repo. What stops <code>@lore</code> being abused?</h3>
+    <dl>
+      <div class="qa-row answer"><dt>Answer</dt><dd>"Three things. Only owners, members and collaborators trigger an answer by default, because each answer is an LLM run on the installer's quota. Bot comments are never answered, or Lore's own reply — which quotes the question — would trigger Lore forever. And the answer goes through the same tenant-bound tools and citation guardrail as <code>/why</code>, so a mention can't read another team's Canon or get an unsourced answer posted. Webhook delivery dedup covers GitHub's retries."</dd></div>
+    </dl>
+  </div>
+
   <div class="end">
-    <p><strong>One last thing.</strong> The strongest signal you can give isn't knowing the code — it's knowing which parts you'd defend and which you'd change. Chapters 6, 9 and 12 are where that lives. If you can open a topic with what the design gets right and close it with what you'd fix first, you're having a design conversation instead of an examination, and that's a different interview.</p>
+    <p><strong>One last thing.</strong> The strongest signal you can give isn't knowing the code — it's knowing which parts you'd defend and which you'd change. Chapters 6, 9 and 13 are where that lives. If you can open a topic with what the design gets right and close it with what you'd fix first, you're having a design conversation instead of an examination, and that's a different interview.</p>
   </div>
 </section>
 
