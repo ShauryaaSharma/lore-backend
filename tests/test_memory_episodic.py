@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from app.memory import episodic
+from lore_backend.memory import episodic
 
 SCOPE = "gh:acme"
 
@@ -90,7 +90,7 @@ def test_record_query_round_trips():
 
 def test_record_query_never_raises_into_the_caller():
     """A logging failure must not fail a /why that already succeeded."""
-    import app.memory.episodic as mod
+    import lore_backend.memory.episodic as mod
 
     original = mod.get_conn
     mod.get_conn = lambda: (_ for _ in ()).throw(RuntimeError("db gone"))

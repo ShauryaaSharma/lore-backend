@@ -1,4 +1,4 @@
-# Optional overlay — only for app/examples/kafka_ingestion (see its README).
+# Optional overlay — only for lore_backend/examples/kafka_ingestion (see its README).
 # Not part of the default `docker compose up`; run with:
 #   docker compose -f docker-compose.yml -f docker-compose.kafka.yml up -d redpanda
 #

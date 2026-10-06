@@ -5,7 +5,7 @@ loading is exercised manually, not in the default test run."""
 
 from __future__ import annotations
 
-import app.retrieval.rerank as rerank_mod
+import lore_backend.retrieval.rerank as rerank_mod
 
 _STOPWORDS = {"why", "did", "we", "for", "the", "a", "over", "our", "to", "of"}
 

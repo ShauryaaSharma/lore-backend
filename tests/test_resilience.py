@@ -1,7 +1,7 @@
 import pytest
 
-from app.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
-from app.resilience.retry import retry
+from lore_backend.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
+from lore_backend.resilience.retry import retry
 
 
 def test_retry_succeeds_after_transient_failures():
