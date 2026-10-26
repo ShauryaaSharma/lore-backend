@@ -1,0 +1,57 @@
+name: Deploy
+
+# Ships main to the EC2 host once CI passes on it. Skipped until the repository
+# variable DEPLOY_HOST is set; see "Deploying to AWS" in the README.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      vars.DEPLOY_HOST != '' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER || 'ec2-user' }}
+          DIR: ${{ vars.DEPLOY_DIR || '/opt/lore' }}
+          # Deploy exactly the commit CI tested, not whatever main is by now.
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          mkdir -p ~/.ssh
+          install -m 600 /dev/null ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          # Pinned host key, so a spoofed host can't receive the deploy.
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$DEPLOY_USER@$HOST" bash -s -- "$DIR" "$SHA" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          git fetch --quiet origin
+          git checkout --quiet --detach "$2"
+          docker compose up -d --build --remove-orphans
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8000/health >/dev/null && curl -fsS -o /dev/null localhost:3000/; then
+              echo "Deployed $2"; docker image prune -f >/dev/null; exit 0
+            fi
+            sleep 5
+          done
+          echo "Health check failed after deploy" >&2
+          docker compose ps
+          exit 1
+          REMOTE

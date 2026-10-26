@@ -266,6 +266,42 @@ Code extension.
 cd web && npm install && npm run dev   # local dev against a running backend
 ```
 
+## CI/CD
+
+`.github/workflows/ci.yml` runs on every pull request and every push to
+`main`: ruff, pytest (with the eval gate) against a Postgres service, the
+web app's tests, typecheck and build, and both Docker image builds.
+
+`.github/workflows/deploy.yml` ships `main` to one EC2 host after CI passes
+on it, or by hand from the Actions tab. It SSHes in, checks out the exact
+commit CI tested, runs `docker compose up -d --build`, and fails if the API
+and site don't come back healthy. It stays skipped until `DEPLOY_HOST` is set.
+
+### Deploying to AWS
+
+One-time setup:
+
+1. Launch an EC2 instance (t3.large or bigger; the embedder needs the
+   memory) with Docker, the Compose plugin and git. Open port 443 only;
+   put Caddy or an ALB in front of ports 3000 (site) and 8000 (API) for
+   HTTPS.
+2. Clone this repository to `/opt/lore` and create `/opt/lore/.env` from
+   `.env.example`, with `AUTH_URL` set to the public site URL.
+3. Create an SSH key pair for deploys and add the public key to the
+   instance user's `~/.ssh/authorized_keys`.
+4. In the repository's **Settings → Secrets and variables → Actions**:
+
+| Name | Kind | Value |
+|---|---|---|
+| `DEPLOY_HOST` | variable | The instance's public DNS name or IP |
+| `DEPLOY_USER` | variable | Optional, default `ec2-user` |
+| `DEPLOY_DIR` | variable | Optional, default `/opt/lore` |
+| `DEPLOY_SSH_KEY` | secret | The deploy private key |
+| `DEPLOY_KNOWN_HOSTS` | secret | Output of `ssh-keyscan <host>`, checked against the instance's real host key |
+
+Deploys run in the `production` environment, so required reviewers can be
+added there to gate them.
+
 ## Deploying the GitHub App
 
 Point the App's webhook URL at `<your-host>/webhook/github` and set
