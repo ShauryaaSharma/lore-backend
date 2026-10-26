@@ -66,6 +66,20 @@ services:
       qdrant:
         condition: service_started
 
+  # The website. Its tables come from the backend's migrations, so it starts after the backend.
+  web:
+    build: ./web
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://lore:lore@postgres:5432/lore
+      LORE_API_URL: http://backend:8080
+      AUTH_TRUST_HOST: "true"
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_started
+
 volumes:
   lore_postgres_data:
   lore_qdrant_data:
