@@ -1,0 +1,33 @@
+{
+  "name": "lore-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"lib/*.test.ts\""
+  },
+  "dependencies": {
+    "@auth/pg-adapter": "^1.11.3",
+    "next": "^16.4.3",
+    "next-auth": "5.0.0-beta.32",
+    "nodemailer": "10.2.1",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "nodemailer": "$nodemailer"
+  }
+}

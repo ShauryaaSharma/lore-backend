@@ -245,6 +245,27 @@ and needs no API keys.
 `tests/test_kafka_ingestion_demo.py` needs the demo's own optional
 dependency (`lore_backend/examples/kafka_ingestion/requirements.txt`).
 
+## Website
+
+`web/` is a Next.js site on top of this API: sign in with GitHub, Google or
+an emailed link (Amazon SES), connect the GitHub accounts where the App is
+installed, and ask `/why` questions. `docker compose up` serves it at
+http://localhost:3000. Fill the `Website` block of `.env` first.
+
+In the GitHub App's settings, add both callback URLs,
+`<site>/api/auth/callback/github` and `<site>/api/github/callback`, and tick
+**Request user authorization (OAuth) during installation**. The site links
+only installations GitHub confirms the signed-in user can reach, then mints
+one Lore key per account through `POST /v1/keys` and stores it encrypted.
+
+Minting the first key switches the API to authenticated mode: from then on
+every read endpoint needs a key, including calls from the CLI and the VS
+Code extension.
+
+```bash
+cd web && npm install && npm run dev   # local dev against a running backend
+```
+
 ## Deploying the GitHub App
 
 Point the App's webhook URL at `<your-host>/webhook/github` and set

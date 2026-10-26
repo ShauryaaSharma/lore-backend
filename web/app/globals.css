@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+/* Tokens from lore-design/LORE-DESIGN-SPEC.md §3–6. Dark follows the OS setting. */
+@theme inline {
+  --font-serif: var(--font-newsreader), Georgia, serif;
+  --font-sans: var(--font-plex-sans), system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+@theme {
+  --color-bg: #faf9f6;
+  --color-surface: #ffffff;
+  --color-sunken: #f3f1ec;
+  --color-line: #e5e2da;
+  --color-line-strong: #cec9bd;
+  --color-ink: #1c1b19;
+  --color-ink-2: #55524b;
+  --color-ink-3: #6e6a61;
+  --color-accent: #1d5e6a;
+  --color-accent-soft: #e3eeef;
+  --color-ok: #2e6a3a;
+  --color-ok-soft: #e4efe3;
+  --color-warn: #845400;
+  --color-warn-soft: #f8eed8;
+  --color-danger: #a2372a;
+  --color-danger-soft: #f8e6e2;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --shadow-pop: 0 1px 2px rgb(28 27 25 / 0.06), 0 8px 24px rgb(28 27 25 / 0.07);
+
+  --animate-pulse-dot: lore-pulse 1.4s ease-in-out infinite;
+  --animate-sheen: lore-sheen 1.6s linear infinite;
+  --animate-fade: lore-fade 150ms ease-out;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #131311;
+    --color-surface: #1a1917;
+    --color-sunken: #211f1c;
+    --color-line: #2d2b27;
+    --color-line-strong: #433f39;
+    --color-ink: #ece9e2;
+    --color-ink-2: #aba69b;
+    --color-ink-3: #928d82;
+    --color-accent: #80c2cc;
+    --color-accent-soft: #18292c;
+    --color-ok: #8cc898;
+    --color-ok-soft: #172519;
+    --color-warn: #e2b35e;
+    --color-warn-soft: #2a2213;
+    --color-danger: #ef9283;
+    --color-danger-soft: #301a16;
+    --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
+    color-scheme: dark;
+  }
+}
+
+/* Small uppercase mono labels: "SOURCES", "READ SO FAR". */
+@utility label {
+  font: 500 11px/16px var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+@layer base {
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+  h1, h2, h3, p {
+    text-wrap: pretty;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  button:not(:disabled), [role="option"] {
+    cursor: pointer;
+  }
+}
+
+@keyframes lore-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.75); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes lore-sheen {
+  from { background-position: -240px 0; }
+  to { background-position: 240px 0; }
+}
+@keyframes lore-fade {
+  from { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-dot, .animate-sheen { animation: none; }
+}
